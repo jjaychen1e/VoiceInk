@@ -19,6 +19,7 @@ final class ShortcutMonitor {
 
     private var shortcuts: [ShortcutAction: ShortcutState] = [:]
     private var interruptibleActions: Set<ShortcutAction> = []
+    private var heldModifierKeyCodes: Set<UInt16> = []
     private var onKeyDown: ((ShortcutAction, TimeInterval) -> Void)?
     private var onKeyUp: ((ShortcutAction, TimeInterval) -> Void)?
     private var onShortcutInterrupted: ((ShortcutAction, TimeInterval) -> Void)?
@@ -71,6 +72,7 @@ final class ShortcutMonitor {
 
         shortcuts = [:]
         interruptibleActions = []
+        heldModifierKeyCodes = []
         onKeyDown = nil
         onKeyUp = nil
         onShortcutInterrupted = nil
@@ -130,6 +132,14 @@ final class ShortcutMonitor {
 
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let modifierFlags = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+        if eventKind == .flagsChanged {
+            heldModifierKeyCodes = Shortcut.updatedHeldModifierKeyCodes(
+                heldModifierKeyCodes,
+                keyCode: keyCode,
+                modifierFlags: modifierFlags
+            )
+        }
+
         return handleEvent(
             kind: eventKind,
             keyCode: keyCode,
@@ -157,6 +167,8 @@ final class ShortcutMonitor {
             }
             dispatchKeyUp(for: action, eventTime: eventTime)
         }
+
+        heldModifierKeyCodes = []
     }
 
     private func handleEvent(
@@ -272,7 +284,11 @@ final class ShortcutMonitor {
         }
 
         if state.isDown {
-            if state.shortcut.shouldReleaseModifierEvent(keyCode: keyCode, modifierFlags: modifierFlags) {
+            if state.shortcut.shouldReleaseModifierEvent(
+                keyCode: keyCode,
+                modifierFlags: modifierFlags,
+                heldModifierKeyCodes: heldModifierKeyCodes
+            ) {
                 state.isDown = false
                 state.pressedAt = nil
                 state.isInterrupted = false
@@ -283,7 +299,11 @@ final class ShortcutMonitor {
             return
         }
 
-        if state.shortcut.matchesModifierEvent(keyCode: keyCode, modifierFlags: modifierFlags) {
+        if state.shortcut.matchesModifierEvent(
+            keyCode: keyCode,
+            modifierFlags: modifierFlags,
+            heldModifierKeyCodes: heldModifierKeyCodes
+        ) {
             state.isDown = true
             state.pressedAt = eventTime
             state.isInterrupted = false

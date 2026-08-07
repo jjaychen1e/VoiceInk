@@ -168,6 +168,8 @@ final class ShortcutRecorderModel: ObservableObject {
     private var activeAction: ShortcutAction?
     private var pendingModifierShortcut: Shortcut?
     private var peakModifierFlags: NSEvent.ModifierFlags = []
+    private var heldModifierKeyCodes: Set<UInt16> = []
+    private var peakModifierKeyCodes: Set<UInt16> = []
 
     deinit {
         removeRecordingMonitor()
@@ -215,6 +217,8 @@ final class ShortcutRecorderModel: ObservableObject {
         activeAction = nil
         pendingModifierShortcut = nil
         peakModifierFlags = []
+        heldModifierKeyCodes = []
+        peakModifierKeyCodes = []
     }
 
     private func showErrorNotification(_ title: String) {
@@ -276,6 +280,11 @@ final class ShortcutRecorderModel: ObservableObject {
 
     private func handleFlagsChanged(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) -> Bool {
         let modifiers = Shortcut.normalizedModifierFlags(modifierFlags, forKeyCode: keyCode)
+        heldModifierKeyCodes = Shortcut.updatedHeldModifierKeyCodes(
+            heldModifierKeyCodes,
+            keyCode: keyCode,
+            modifierFlags: modifierFlags
+        )
 
         if modifiers.isEmpty,
             Shortcut.isFunctionKeyCode(keyCode),
@@ -286,12 +295,16 @@ final class ShortcutRecorderModel: ObservableObject {
 
         if !modifiers.isEmpty {
             peakModifierFlags.formUnion(modifiers)
-            let singleModifierKeyCode = Shortcut.modifierKeyCodeForSingleModifierEvent(
-                keyCode: keyCode,
-                modifiers: peakModifierFlags
-            )
+            peakModifierKeyCodes.formUnion(heldModifierKeyCodes)
+            peakModifierKeyCodes = peakModifierKeyCodes.filter { heldKeyCode in
+                guard let flag = Shortcut.modifierFlag(forKeyCode: heldKeyCode) else {
+                    return false
+                }
+                return peakModifierFlags.contains(flag)
+            }
+
             let shortcut = Shortcut.modifierOnly(
-                keyCode: singleModifierKeyCode,
+                keyCodes: Array(peakModifierKeyCodes),
                 modifierFlags: peakModifierFlags
             )
 
@@ -304,6 +317,8 @@ final class ShortcutRecorderModel: ObservableObject {
             finish(with: pendingModifierShortcut)
         }
 
+        heldModifierKeyCodes = []
+        peakModifierKeyCodes = []
         return true
     }
 }
