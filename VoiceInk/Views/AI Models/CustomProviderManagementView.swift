@@ -383,6 +383,12 @@ struct CustomEnhancementModelEditorPanel: View {
     @State private var baseURL = ""
     @State private var apiKey = ""
     @State private var modelName = ""
+    /// New models default to omitting temperature (GPT-5.6-compatible).
+    @State private var sendsTemperature = false
+    @State private var temperatureText = "0.3"
+    /// New models default to sending reasoning_effort=none for fast polish.
+    @State private var sendsReasoningEffort = true
+    @State private var reasoningEffort: CustomReasoningEffort = .none
     @State private var errorMessage: String?
     @State private var isSaving = false
     @State private var connectionTest: ConnectionTestState = .idle
@@ -445,6 +451,49 @@ struct CustomEnhancementModelEditorPanel: View {
                                 label: "API Key", placeholder: String(localized: "Paste API key"), text: $apiKey,
                                 isSecure: true)
                             CustomModelTextField(label: "Model Name", placeholder: "gpt-5.5", text: $modelName)
+                            CustomModelToggleRow(title: "Send Temperature", isOn: $sendsTemperature)
+                            if sendsTemperature {
+                                CustomModelTextField(
+                                    label: "Temperature",
+                                    placeholder: "0.3",
+                                    text: $temperatureText
+                                )
+                            }
+                            Text(
+                                sendsTemperature
+                                    ? String(
+                                        localized:
+                                            "Include temperature in chat requests (0–2). Use a low value for more stable polish."
+                                    )
+                                    : String(
+                                        localized:
+                                            "Omit temperature from requests. Required for GPT-5.6 / reasoning models that reject this parameter."
+                                    )
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            CustomModelToggleRow(title: "Send Reasoning Effort", isOn: $sendsReasoningEffort)
+                            if sendsReasoningEffort {
+                                CustomModelPickerRow(
+                                    title: "Reasoning Effort",
+                                    selection: $reasoningEffort
+                                )
+                            }
+                            Text(
+                                sendsReasoningEffort
+                                    ? String(
+                                        localized:
+                                            "Controls how hard the model thinks. Prefer none for fast transcription polish."
+                                    )
+                                    : String(
+                                        localized:
+                                            "Omit reasoning_effort. Some gateways reject unknown fields; others default to medium (slower/costlier)."
+                                    )
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                             ConnectionTestRow(
                                 state: connectionTest, isDisabled: !canTestConnection, action: runConnectionTest)
                         }
@@ -488,11 +537,21 @@ struct CustomEnhancementModelEditorPanel: View {
             baseURL = editingProvider.baseURL
             apiKey = APIKeyManager.shared.getCustomAIProviderAPIKey(forProviderId: editingProvider.id) ?? ""
             modelName = editingProvider.modelName
+            sendsTemperature = editingProvider.sendsTemperature
+            temperatureText = String(editingProvider.temperature)
+            sendsReasoningEffort = editingProvider.sendsReasoningEffort
+            reasoningEffort = editingProvider.reasoningEffort
         } else {
             displayName = ""
             baseURL = "https://api.openai.com/v1/chat/completions"
             apiKey = ""
             modelName = "gpt-5.5"
+            // Prefer omit for new custom models; many modern endpoints reject temperature.
+            sendsTemperature = false
+            temperatureText = "0.3"
+            // Prefer explicit none for fast polish; omitting often defaults to medium.
+            sendsReasoningEffort = true
+            reasoningEffort = .none
         }
 
         errorMessage = nil
@@ -525,6 +584,23 @@ struct CustomEnhancementModelEditorPanel: View {
             validationErrors.append(String(localized: "API key cannot be empty"))
         }
 
+        let resolvedTemperature: Double
+        if sendsTemperature {
+            let normalizedTemperatureText = temperatureText.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: ",", with: ".")
+            guard let parsedTemperature = Double(normalizedTemperatureText),
+                parsedTemperature >= 0,
+                parsedTemperature <= 2
+            else {
+                validationErrors.append(String(localized: "Temperature must be a number between 0 and 2"))
+                errorMessage = validationErrors.joined(separator: "\n")
+                return
+            }
+            resolvedTemperature = parsedTemperature
+        } else {
+            resolvedTemperature = 0.3
+        }
+
         guard validationErrors.isEmpty else {
             errorMessage = validationErrors.joined(separator: "\n")
             return
@@ -537,7 +613,11 @@ struct CustomEnhancementModelEditorPanel: View {
             name: trimmedName,
             baseURL: trimmedURL,
             models: [trimmedModelName],
-            selectedModel: trimmedModelName
+            selectedModel: trimmedModelName,
+            sendsTemperature: sendsTemperature,
+            temperature: resolvedTemperature,
+            sendsReasoningEffort: sendsReasoningEffort,
+            reasoningEffort: reasoningEffort
         )
 
         if isEditing {
@@ -566,7 +646,7 @@ struct CustomEnhancementModelEditorPanel: View {
 }
 
 private enum CustomModelEditorMetrics {
-    static let labelWidth: CGFloat = 112
+    static let labelWidth: CGFloat = 140
     static let fieldMaxWidth: CGFloat = 220
 }
 
@@ -722,6 +802,33 @@ private struct CustomModelToggleRow: View {
 
             Toggle("", isOn: $isOn)
                 .labelsHidden()
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CustomModelPickerRow: View {
+    let title: LocalizedStringKey
+    @Binding var selection: CustomReasoningEffort
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: CustomModelEditorMetrics.labelWidth, alignment: .leading)
+
+            Picker("", selection: $selection) {
+                ForEach(CustomReasoningEffort.allCases) { effort in
+                    Text(effort.displayName).tag(effort)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: CustomModelEditorMetrics.fieldMaxWidth, alignment: .trailing)
 
             Spacer(minLength: 0)
         }

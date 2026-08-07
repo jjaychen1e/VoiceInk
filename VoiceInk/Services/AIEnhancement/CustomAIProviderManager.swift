@@ -1,19 +1,83 @@
 import Foundation
 import os
 
+/// Allowed Chat Completions `reasoning_effort` values for custom providers.
+enum CustomReasoningEffort: String, CaseIterable, Codable, Hashable, Identifiable {
+    case none
+    case low
+    case medium
+    case high
+    case xhigh
+
+    var id: String { rawValue }
+
+    /// Display label for the picker (matches the API string).
+    var displayName: String { rawValue }
+
+    /// Parses a stored/API value, falling back to `none` when unknown.
+    static func resolved(from rawValue: String?) -> CustomReasoningEffort {
+        guard let rawValue,
+            let value = CustomReasoningEffort(rawValue: rawValue)
+        else {
+            return .none
+        }
+        return value
+    }
+}
+
 struct CustomAIProviderConfig: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
     var baseURL: String
     var models: [String]
     var selectedModel: String
+    /// When false, enhancement requests omit `temperature` (required by GPT-5.6-class models).
+    var sendsTemperature: Bool
+    /// Sampling temperature used when `sendsTemperature` is true.
+    var temperature: Double
+    /// When false, enhancement requests omit `reasoning_effort`.
+    var sendsReasoningEffort: Bool
+    /// Chat Completions `reasoning_effort` used when `sendsReasoningEffort` is true.
+    var reasoningEffort: CustomReasoningEffort
 
-    init(id: UUID = UUID(), name: String, baseURL: String, models: [String], selectedModel: String) {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        baseURL: String,
+        models: [String],
+        selectedModel: String,
+        sendsTemperature: Bool = true,
+        temperature: Double = 0.3,
+        sendsReasoningEffort: Bool = false,
+        reasoningEffort: CustomReasoningEffort = .none
+    ) {
         self.id = id
         self.name = name
         self.baseURL = baseURL
         self.models = models
         self.selectedModel = selectedModel
+        self.sendsTemperature = sendsTemperature
+        self.temperature = temperature
+        self.sendsReasoningEffort = sendsReasoningEffort
+        self.reasoningEffort = reasoningEffort
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        baseURL = try container.decode(String.self, forKey: .baseURL)
+        models = try container.decode([String].self, forKey: .models)
+        selectedModel = try container.decode(String.self, forKey: .selectedModel)
+        // Existing saved providers historically always sent temperature: 0.3.
+        sendsTemperature = try container.decodeIfPresent(Bool.self, forKey: .sendsTemperature) ?? true
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.3
+        // Existing saved providers never sent reasoning_effort; keep that behavior.
+        sendsReasoningEffort =
+            try container.decodeIfPresent(Bool.self, forKey: .sendsReasoningEffort) ?? false
+        reasoningEffort = CustomReasoningEffort.resolved(
+            from: try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
+        )
     }
 
     var trimmedModels: [String] {
@@ -30,16 +94,42 @@ struct CustomAIProviderConfig: Identifiable, Codable, Hashable {
         return trimmedModels.first ?? ""
     }
 
+    /// Temperature to include in the chat body, or `nil` to omit the field.
+    var temperatureForRequest: Double? {
+        sendsTemperature ? temperature : nil
+    }
+
+    /// Reasoning effort to include in the chat body, or `nil` to omit the field.
+    var reasoningEffortForRequest: String? {
+        sendsReasoningEffort ? reasoningEffort.rawValue : nil
+    }
+
     var normalizedForStorage: CustomAIProviderConfig {
         let resolvedModelName = self.modelName
+        let clampedTemperature = min(max(temperature, 0), 2)
         return CustomAIProviderConfig(
             id: id,
             name: name,
             baseURL: baseURL,
             models: resolvedModelName.isEmpty ? [] : [resolvedModelName],
-            selectedModel: resolvedModelName
+            selectedModel: resolvedModelName,
+            sendsTemperature: sendsTemperature,
+            temperature: clampedTemperature,
+            sendsReasoningEffort: sendsReasoningEffort,
+            reasoningEffort: reasoningEffort
         )
     }
+}
+
+/// Resolved Custom enhancement endpoint settings for a chat request.
+struct CustomAIRequestConfiguration {
+    let baseURL: String
+    let apiKey: String
+    let modelName: String
+    /// `nil` means omit `temperature` from the JSON body.
+    let temperature: Double?
+    /// `nil` means omit `reasoning_effort` from the JSON body.
+    let reasoningEffort: String?
 }
 
 final class CustomAIProviderManager: ObservableObject {
@@ -155,7 +245,7 @@ final class CustomAIProviderManager: ObservableObject {
         }
     }
 
-    func requestConfiguration(forModel modelName: String) -> (baseURL: String, apiKey: String, modelName: String)? {
+    func requestConfiguration(forModel modelName: String) -> CustomAIRequestConfiguration? {
         guard let provider = provider(forModel: modelName),
             let apiKey = APIKeyManager.shared.getCustomAIProviderAPIKey(forProviderId: provider.id),
             !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -163,7 +253,13 @@ final class CustomAIProviderManager: ObservableObject {
             return nil
         }
 
-        return (provider.baseURL, apiKey, provider.modelName)
+        return CustomAIRequestConfiguration(
+            baseURL: provider.baseURL,
+            apiKey: apiKey,
+            modelName: provider.modelName,
+            temperature: provider.temperatureForRequest,
+            reasoningEffort: provider.reasoningEffortForRequest
+        )
     }
 
     func validateProvider(name: String, baseURL: String, model: String, excluding id: UUID? = nil) -> [String] {

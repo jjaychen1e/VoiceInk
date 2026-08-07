@@ -311,13 +311,14 @@ class AIEnhancementService: ObservableObject {
                 else {
                     throw EnhancementError.notConfigured
                 }
-                result = try await OpenAILLMClient.chatCompletion(
+                result = try await OptionalTemperatureOpenAIClient.chatCompletion(
                     baseURL: baseURL,
                     apiKey: customConfiguration.apiKey,
                     model: customConfiguration.modelName,
                     messages: [.user(formattedText)],
                     systemPrompt: systemMessage,
-                    temperature: 0.3,
+                    temperature: customConfiguration.temperature,
+                    reasoningEffort: customConfiguration.reasoningEffort,
                     timeout: baseTimeout
                 )
             default:
