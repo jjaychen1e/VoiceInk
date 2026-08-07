@@ -48,9 +48,14 @@ build: setup
 local: check setup
 	@echo "Building VoiceInk for local use (no Apple Developer certificate required)..."
 	@rm -rf "$(LOCAL_DERIVED_DATA)"
+	@# Xcode 26 needs plugin/macro skips for mlx-swift CLI builds; export GIT bareRepository for SPM caches.
+	GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
 	xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
 		-derivedDataPath "$(LOCAL_DERIVED_DATA)" \
 		-xcconfig LocalBuild.xcconfig \
+		-destination 'platform=macOS,arch=arm64' \
+		-skipPackagePluginValidation \
+		-skipMacroValidation \
 		CODE_SIGN_IDENTITY="-" \
 		CODE_SIGNING_REQUIRED=NO \
 		CODE_SIGNING_ALLOWED=YES \
