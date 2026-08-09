@@ -45,8 +45,12 @@ build: setup
 	xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug CODE_SIGN_IDENTITY="" build
 
 # Build for local use without Apple Developer certificate
+LOCAL_CODESIGN_IDENTITY ?= VoiceInk Local Codesign
+
 local: check setup
-	@echo "Building VoiceInk for local use (no Apple Developer certificate required)..."
+	@echo "Ensuring local codesign identity exists..."
+	@./scripts/setup-local-codesign.sh
+	@echo "Building VoiceInk for local use with stable identity: $(LOCAL_CODESIGN_IDENTITY)"
 	@rm -rf "$(LOCAL_DERIVED_DATA)"
 	@# Xcode 26 needs plugin/macro skips for mlx-swift CLI builds; export GIT bareRepository for SPM caches.
 	GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
@@ -56,8 +60,8 @@ local: check setup
 		-destination 'platform=macOS,arch=arm64' \
 		-skipPackagePluginValidation \
 		-skipMacroValidation \
-		CODE_SIGN_IDENTITY="-" \
-		CODE_SIGNING_REQUIRED=NO \
+		CODE_SIGN_IDENTITY="$(LOCAL_CODESIGN_IDENTITY)" \
+		CODE_SIGNING_REQUIRED=YES \
 		CODE_SIGNING_ALLOWED=YES \
 		DEVELOPMENT_TEAM="" \
 		CODE_SIGN_ENTITLEMENTS="$(CURDIR)/VoiceInk/VoiceInk.local.entitlements" \
@@ -65,17 +69,32 @@ local: check setup
 		build
 	@APP_PATH="$(LOCAL_DERIVED_DATA)/Build/Products/Debug/VoiceInk.app" && \
 	if [ -d "$$APP_PATH" ]; then \
-		echo "Copying VoiceInk.app to ~/Downloads..."; \
+		echo "Re-signing app bundle with stable identity..."; \
+		codesign --force --deep --sign "$(LOCAL_CODESIGN_IDENTITY)" \
+			--entitlements "$(CURDIR)/VoiceInk/VoiceInk.local.entitlements" \
+			"$$APP_PATH/Contents/XPCServices/"*.xpc 2>/dev/null || true; \
+		codesign --force --deep --sign "$(LOCAL_CODESIGN_IDENTITY)" \
+			--entitlements "$(CURDIR)/VoiceInk/VoiceInk.local.entitlements" \
+			"$$APP_PATH"; \
+		echo "Copying VoiceInk.app to ~/Downloads and /Applications..."; \
 		rm -rf "$$HOME/Downloads/VoiceInk.app"; \
 		ditto "$$APP_PATH" "$$HOME/Downloads/VoiceInk.app"; \
 		xattr -cr "$$HOME/Downloads/VoiceInk.app"; \
+		osascript -e 'quit app "VoiceInk"' >/dev/null 2>&1 || true; \
+		sleep 1; \
+		rm -rf /Applications/VoiceInk.app; \
+		ditto "$$APP_PATH" /Applications/VoiceInk.app; \
+		xattr -cr /Applications/VoiceInk.app; \
 		echo ""; \
-		echo "Build complete! App saved to: ~/Downloads/VoiceInk.app"; \
-		echo "Run with: open ~/Downloads/VoiceInk.app"; \
+		echo "Build complete!"; \
+		echo "  ~/Downloads/VoiceInk.app"; \
+		echo "  /Applications/VoiceInk.app"; \
+		codesign -d -r- /Applications/VoiceInk.app 2>&1 | sed -n 's/^designated => /Designated requirement: /p'; \
 		echo ""; \
 		echo "Limitations of local builds:"; \
 		echo "  - No iCloud dictionary sync"; \
 		echo "  - No automatic updates (pull new code and rebuild to update)"; \
+		echo "  - Signed with self-signed '$(LOCAL_CODESIGN_IDENTITY)' (Accessibility survives rebuilds)"; \
 	else \
 		echo "Error: Could not find built VoiceInk.app at $$APP_PATH"; \
 		exit 1; \

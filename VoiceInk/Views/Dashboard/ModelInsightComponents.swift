@@ -395,13 +395,13 @@ private struct ModelProviderIdentity {
         }
 
         if isSavedOpenRouterModel(trimmedName) {
-            return identity(for: .openRouter)
+            return identity(for: AIProvider.openRouter)
         }
 
         if matchingProviders.isEmpty,
             isOpenRouterModelIdentifier(trimmedName)
         {
-            return identity(for: .openRouter)
+            return identity(for: AIProvider.openRouter)
         }
 
         if matchingProviders.isEmpty,
@@ -555,6 +555,10 @@ private struct ModelProviderIdentity {
 
         if lowercaseName.hasPrefix("gpt-") {
             return .openAI
+        }
+
+        if lowercaseName.hasPrefix("qwen") {
+            return .alibaba
         }
 
         return nil

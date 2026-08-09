@@ -21,12 +21,33 @@ final class APIKeyManager {
         "assemblyai": "assemblyAIAPIKey",
         "xai": "xaiAPIKey",
         "cartesia": "cartesiaAPIKey",
+        "alibaba": "alibabaAPIKey",
+        // Legacy key used when the provider was labeled DashScope.
+        "dashscope": "alibabaAPIKey",
         "openai": "openAIAPIKey",
         "anthropic": "anthropicAPIKey",
         "openrouter": "openRouterAPIKey",
     ]
 
-    private init() {}
+    private init() {
+        migrateLegacyDashScopeAPIKeyIfNeeded()
+    }
+
+    /// Copies a previously saved DashScope key into the Alibaba keychain slot.
+    private func migrateLegacyDashScopeAPIKeyIfNeeded() {
+        let legacyKey = "dashScopeAPIKey"
+        let newKey = "alibabaAPIKey"
+        guard !keychain.exists(forKey: newKey),
+            let legacyValue = keychain.getString(forKey: legacyKey),
+            !legacyValue.isEmpty
+        else {
+            return
+        }
+        if keychain.save(legacyValue, forKey: newKey) {
+            _ = keychain.delete(forKey: legacyKey)
+            logger.info("Migrated legacy DashScope API key to Alibaba")
+        }
+    }
 
     // MARK: - Standard Provider API Keys
 

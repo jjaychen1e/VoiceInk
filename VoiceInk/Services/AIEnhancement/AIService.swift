@@ -9,6 +9,7 @@ enum AIProvider: String, CaseIterable {
     case anthropic = "Anthropic"
     case openAI = "OpenAI"
     case openRouter = "OpenRouter"
+    case alibaba = "Alibaba"
     case mistral = "Mistral"
     case elevenLabs = "ElevenLabs"
     case deepgram = "Deepgram"
@@ -34,6 +35,10 @@ enum AIProvider: String, CaseIterable {
             return "https://api.openai.com/v1/chat/completions"
         case .openRouter:
             return "https://openrouter.ai/api/v1/chat/completions"
+        case .alibaba:
+            return DashScopeRegion.current.compatibleBaseURL
+                .appendingPathComponent("chat/completions")
+                .absoluteString
         case .mistral:
             return "https://api.mistral.ai/v1/chat/completions"
         case .elevenLabs:
@@ -71,6 +76,8 @@ enum AIProvider: String, CaseIterable {
             return "gpt-5.5"
         case .mistral:
             return "mistral-medium-3-5"
+        case .alibaba:
+            return "qwen-flash"
         case .elevenLabs:
             return "scribe_v2"
         case .deepgram:
@@ -138,6 +145,15 @@ enum AIProvider: String, CaseIterable {
             return [
                 "mistral-medium-3-5",
                 "mistral-small-2603",
+            ]
+        case .alibaba:
+            return [
+                "qwen-flash",
+                "qwen-plus",
+                "qwen-max",
+                "qwen3.7-flash",
+                "qwen3.7-plus",
+                "qwen3.8-max",
             ]
         case .elevenLabs:
             return ["scribe_v2"]

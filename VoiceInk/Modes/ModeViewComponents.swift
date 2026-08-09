@@ -127,7 +127,7 @@ struct ConfigurationRow: View {
         ) {
         case .available(_, let model):
             return TranscriptionModelMetadata(
-                label: model.displayName,
+                label: model.selectionLabel,
                 isWarning: false
             )
         case .noMode, .noSelection, .modelNotFound, .unavailable:

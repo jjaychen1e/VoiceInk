@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>Alibaba</title>
+  <rect width="64" height="64" rx="14" fill="#FF6A00"/>
+  <path fill="#FFFFFF" d="M18 38c0-9.389 7.611-17 17-17h1.5c7.456 0 13.5 6.044 13.5 13.5S43.956 48 36.5 48H28c-1.105 0-2-.895-2-2s.895-2 2-2h8.5c5.247 0 9.5-4.253 9.5-9.5S41.747 25 36.5 25H35c-7.18 0-13 5.82-13 13v1c0 1.105-.895 2-2 2s-2-.895-2-2v-1z"/>
+  <circle cx="24" cy="42" r="3.5" fill="#FFFFFF"/>
+  <circle cx="33" cy="42" r="3.5" fill="#FFFFFF"/>
+  <circle cx="42" cy="42" r="3.5" fill="#FFFFFF"/>
+</svg>

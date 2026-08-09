@@ -16,9 +16,14 @@ struct ProviderDetailPanel: View {
     @State private var verificationSucceeded = false
     @State private var isShowingRemoveAPIKeyConfirmation = false
     @State private var activeDescriptorID = ""
+    @AppStorage(DashScopeRegion.userDefaultsKey) private var dashScopeRegionRaw = DashScopeRegion.beijing.rawValue
 
     private var isConfigured: Bool {
         APIKeyManager.shared.hasAPIKey(forProvider: descriptor.providerKey)
+    }
+
+    private var selectedDashScopeRegion: DashScopeRegion {
+        DashScopeRegion(rawValue: dashScopeRegionRaw) ?? .beijing
     }
 
     private var iconName: String {
@@ -35,6 +40,10 @@ struct ProviderDetailPanel: View {
                 VStack(alignment: .leading, spacing: 18) {
                     apiKeySection
 
+                    if isAlibabaProvider {
+                        alibabaRegionSection
+                    }
+
                     if descriptor.hasTranscription {
                         transcriptionModelsSection
                     }
@@ -50,6 +59,10 @@ struct ProviderDetailPanel: View {
         .onChange(of: descriptor.id) { _, _ in
             resetProviderState()
         }
+    }
+
+    private var isAlibabaProvider: Bool {
+        descriptor.providerKey.caseInsensitiveCompare("Alibaba") == .orderedSame
     }
 
     private var header: some View {
@@ -94,6 +107,30 @@ struct ProviderDetailPanel: View {
                 }
 
                 verificationStatusMessage
+            }
+        }
+    }
+
+    /// Region picker for Alibaba (DashScope) — Beijing and Singapore use different API keys.
+    private var alibabaRegionSection: some View {
+        ProviderConfigurationGroup(title: "Region") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker(
+                    "API Region",
+                    selection: Binding(
+                        get: { selectedDashScopeRegion },
+                        set: { dashScopeRegionRaw = $0.rawValue }
+                    )
+                ) {
+                    ForEach(DashScopeRegion.allCases) { region in
+                        Text(region.displayName).tag(region)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("Beijing and Singapore require different Alibaba API keys.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }

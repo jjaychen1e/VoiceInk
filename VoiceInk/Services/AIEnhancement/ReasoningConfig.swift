@@ -78,6 +78,9 @@ struct ReasoningConfig {
             return ["reasoning_format": "hidden"]
         } else if provider == .groq && (modelName == "openai/gpt-oss-120b" || modelName == "openai/gpt-oss-20b") {
             return ["include_reasoning": false]
+        } else if provider == .alibaba {
+            // Keep enhancement latency low; Qwen3-family may otherwise default into thinking.
+            return ["enable_thinking": false]
         }
         return nil
     }

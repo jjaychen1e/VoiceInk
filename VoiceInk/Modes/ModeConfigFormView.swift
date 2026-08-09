@@ -207,8 +207,14 @@ struct ModeConfigFormView: View {
                             .tag(nil as String?)
                     }
 
-                    ForEach(warmupSnapshot.usableTranscriptionModels, id: \.name) { model in
-                        Text(model.displayName).tag(model.name as String?)
+                    ForEach(
+                        warmupSnapshot.usableTranscriptionModels.sorted {
+                            $0.selectionLabel.localizedCaseInsensitiveCompare($1.selectionLabel)
+                                == .orderedAscending
+                        },
+                        id: \.name
+                    ) { model in
+                        Text(model.selectionLabel).tag(model.name as String?)
                     }
                 }
                 .onChange(of: draft.selectedTranscriptionModelName) { _, newModelName in

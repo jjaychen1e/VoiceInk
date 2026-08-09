@@ -429,6 +429,8 @@ fileprivate extension AIProvider {
             return URL(string: "https://openrouter.ai/keys")
         case .cerebras:
             return URL(string: "https://cloud.cerebras.ai/platform")
+        case .alibaba:
+            return DashScopeRegion.current.apiConsoleURL
         default:
             return nil
         }

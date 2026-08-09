@@ -14,6 +14,8 @@ enum ModelProvider: String, Codable, Hashable, CaseIterable {
     case assemblyAI = "AssemblyAI"
     case xai = "xAI"
     case cartesia = "Cartesia"
+    case alibaba = "Alibaba"
+    case openRouter = "OpenRouter"
     case custom = "Custom"
     case nativeApple = "Native Apple"
 
@@ -23,6 +25,11 @@ enum ModelProvider: String, Codable, Hashable, CaseIterable {
         // "Local" was the raw value before renaming to "Whisper"
         if raw == "Local" {
             self = .whisper
+            return
+        }
+        // "DashScope" was the raw value before renaming to "Alibaba"
+        if raw == "DashScope" {
+            self = .alibaba
             return
         }
         guard let value = ModelProvider(rawValue: raw) else {
@@ -57,6 +64,11 @@ extension TranscriptionModel {
     }
 
     var supportsStreaming: Bool { false }
+
+    /// Label for pickers/lists that mix models from multiple providers.
+    var selectionLabel: String {
+        "\(provider.rawValue) - \(displayName)"
+    }
 }
 
 // A new struct for Apple's native models

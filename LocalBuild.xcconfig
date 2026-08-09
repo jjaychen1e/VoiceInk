@@ -1,9 +1,10 @@
 // LocalBuild.xcconfig
-// Build configuration for local/unsigned builds (no Apple Developer certificate required).
+// Build configuration for local builds without an Apple Developer Program membership.
 // Used by `make local` — does NOT affect Debug or Release configurations.
 
-// Ad-hoc signing (works without a developer account)
-CODE_SIGN_IDENTITY = -
+// Stable self-signed identity so TCC (Accessibility) survives rebuilds.
+// Create/import with: scripts/setup-local-codesign.sh
+CODE_SIGN_IDENTITY = VoiceInk Local Codesign
 CODE_SIGN_STYLE = Manual
 DEVELOPMENT_TEAM =
 PROVISIONING_PROFILE_SPECIFIER =

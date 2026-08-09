@@ -14,6 +14,7 @@ struct CloudProviderManagementView: View {
             .groq,
             .mistral,
             .cerebras,
+            .alibaba,
         ]
 
         var descriptors = enhancementProviders.map { aiProvider in
@@ -44,6 +45,7 @@ struct CloudProviderManagementView: View {
         let preferredOrder = [
             "Groq", "Cerebras", "Gemini", "OpenAI", "OpenRouter", "Anthropic", "Mistral",
             "Deepgram", "ElevenLabs", "Soniox", "Speechmatics", "AssemblyAI", "xAI", "Cartesia",
+            "Alibaba",
         ]
 
         return descriptors.sorted { first, second in
@@ -130,6 +132,8 @@ struct ProviderDescriptor: Identifiable {
             return "provider-xai"
         case "cartesia":
             return "provider-cartesia"
+        case "alibaba":
+            return "provider-alibaba"
         default:
             return nil
         }
@@ -165,6 +169,8 @@ struct ProviderDescriptor: Identifiable {
             return URL(string: "https://console.x.ai/")
         case "cartesia":
             return URL(string: "https://play.cartesia.ai/keys")
+        case "alibaba":
+            return DashScopeRegion.current.apiConsoleURL
         default:
             return nil
         }

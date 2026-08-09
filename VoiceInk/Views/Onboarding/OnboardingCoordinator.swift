@@ -229,6 +229,7 @@ final class OnboardingCoordinator: ObservableObject {
             .openRouter,
             .anthropic,
             .mistral,
+            .alibaba,
         ]
 
         let supportedProviders = AIProvider.allCases.filter { provider in
@@ -253,7 +254,7 @@ final class OnboardingCoordinator: ObservableObject {
 
     var onboardingTranscriptionProviderOptions: [any CloudProvider] {
         let preferredOrder = [
-            "AssemblyAI", "Cartesia", "Deepgram", "ElevenLabs", "Soniox",
+            "AssemblyAI", "Cartesia", "Alibaba", "Deepgram", "ElevenLabs", "Soniox",
             "Speechmatics", "xAI", "Mistral", "Groq", "Gemini",
         ]
 
