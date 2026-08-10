@@ -4,6 +4,7 @@ import SwiftUI
 struct TranscriptionHistoryView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var searchText = ""
+    @State private var showFavoritesOnly = false
     @State private var selectedTranscription: Transcription?
     @State private var selectedTranscriptions: Set<Transcription> = []
     @State private var showDeleteConfirmation = false
@@ -32,31 +33,12 @@ struct TranscriptionHistoryView: View {
     }
 
     private func cursorQueryDescriptor(after timestamp: Date? = nil) -> FetchDescriptor<Transcription> {
-        var descriptor = FetchDescriptor<Transcription>(
-            sortBy: [SortDescriptor(\Transcription.timestamp, order: .reverse)]
+        TranscriptionHistoryQuery.cursorDescriptor(
+            searchText: searchText,
+            favoritesOnly: showFavoritesOnly,
+            after: timestamp,
+            pageSize: pageSize
         )
-
-        if let timestamp = timestamp {
-            if !searchText.isEmpty {
-                descriptor.predicate = #Predicate<Transcription> { transcription in
-                    (transcription.text.localizedStandardContains(searchText)
-                        || (transcription.enhancedText?.localizedStandardContains(searchText) ?? false))
-                        && transcription.timestamp < timestamp
-                }
-            } else {
-                descriptor.predicate = #Predicate<Transcription> { transcription in
-                    transcription.timestamp < timestamp
-                }
-            }
-        } else if !searchText.isEmpty {
-            descriptor.predicate = #Predicate<Transcription> { transcription in
-                transcription.text.localizedStandardContains(searchText)
-                    || (transcription.enhancedText?.localizedStandardContains(searchText) ?? false)
-            }
-        }
-
-        descriptor.fetchLimit = pageSize
-        return descriptor
     }
 
     private func openAnalysisPanel() {
@@ -156,6 +138,12 @@ struct TranscriptionHistoryView: View {
                 await loadInitialContent()
             }
         }
+        .onChange(of: showFavoritesOnly) { _, _ in
+            Task {
+                await resetPagination()
+                await loadInitialContent()
+            }
+        }
         .onChange(of: latestTranscriptionIndicator.first?.id) { oldId, newId in
             guard isViewCurrentlyVisible else { return }
             if newId != oldId {
@@ -187,23 +175,44 @@ struct TranscriptionHistoryView: View {
 
     private var leftSidebarView: some View {
         VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                    .font(.system(size: 13))
-                TextField("Search transcriptions", text: $searchText)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 13))
+            HStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 13))
+                    TextField("Search transcriptions", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .font(.system(size: 13))
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
+                        .fill(AppTheme.Surface.subtle)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
+                                .strokeBorder(AppTheme.Border.tint, lineWidth: 1)
+                        }
+                )
+
+                Button {
+                    showFavoritesOnly.toggle()
+                } label: {
+                    Image(systemName: showFavoritesOnly ? "star.fill" : "star")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(showFavoritesOnly ? Color.yellow : Color.secondary)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
+                                .fill(AppTheme.Surface.subtle)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
+                                        .strokeBorder(AppTheme.Border.tint, lineWidth: 1)
+                                }
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(showFavoritesOnly ? "Show All" : "Show Favorites Only")
             }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
-                    .fill(AppTheme.Surface.subtle)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
-                            .strokeBorder(AppTheme.Border.tint, lineWidth: 1)
-                    }
-            )
             .padding(12)
 
             Divider()
@@ -211,10 +220,10 @@ struct TranscriptionHistoryView: View {
             ZStack(alignment: .bottom) {
                 if displayedTranscriptions.isEmpty && !isLoading {
                     VStack(spacing: 12) {
-                        Image(systemName: "doc.text.magnifyingglass")
+                        Image(systemName: showFavoritesOnly ? "star" : "doc.text.magnifyingglass")
                             .font(.system(size: 40))
                             .foregroundColor(.secondary)
-                        Text("No transcriptions")
+                        Text(showFavoritesOnly ? "No favorites yet" : "No transcriptions")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(.secondary)
                     }
@@ -228,7 +237,8 @@ struct TranscriptionHistoryView: View {
                                     isSelected: selectedTranscription == transcription,
                                     isChecked: selectedTranscriptions.contains(transcription),
                                     onSelect: { selectedTranscription = transcription },
-                                    onToggleCheck: { toggleSelection(transcription) }
+                                    onToggleCheck: { toggleSelection(transcription) },
+                                    onToggleFavorite: { toggleFavorite(transcription) }
                                 )
                             }
 
@@ -488,18 +498,28 @@ struct TranscriptionHistoryView: View {
         }
     }
 
+    /// Toggles favorite state and refreshes when filtering favorites only.
+    private func toggleFavorite(_ transcription: Transcription) {
+        transcription.isFavorite.toggle()
+        do {
+            try modelContext.save()
+        } catch {
+            print("Error saving favorite: \(error.localizedDescription)")
+        }
+        if showFavoritesOnly && !transcription.isFavorite {
+            Task {
+                await resetPagination()
+                await loadInitialContent()
+            }
+        }
+    }
+
     private func selectAllTranscriptions() async {
         do {
-            var allDescriptor = FetchDescriptor<Transcription>()
-
-            if !searchText.isEmpty {
-                allDescriptor.predicate = #Predicate<Transcription> { transcription in
-                    transcription.text.localizedStandardContains(searchText)
-                        || (transcription.enhancedText?.localizedStandardContains(searchText) ?? false)
-                }
-            }
-
-            allDescriptor.propertiesToFetch = [\.id]
+            let allDescriptor = TranscriptionHistoryQuery.matchingAllDescriptor(
+                searchText: searchText,
+                favoritesOnly: showFavoritesOnly
+            )
             let allTranscriptions = try modelContext.fetch(allDescriptor)
             let visibleIds = Set(displayedTranscriptions.map { $0.id })
 

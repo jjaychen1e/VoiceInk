@@ -143,6 +143,11 @@ struct ModeView: View {
                                         modeManager: modeManager,
                                         onEditConfig: { config in
                                             openPanel(mode: .edit(config))
+                                        },
+                                        onDuplicateConfig: { config in
+                                            if let copy = modeManager.duplicateConfiguration(from: config.id) {
+                                                openPanel(mode: .edit(copy))
+                                            }
                                         }
                                     )
                                     .padding(.horizontal, 24)

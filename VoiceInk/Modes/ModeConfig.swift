@@ -20,6 +20,24 @@ enum AutoSendKey: String, Codable, CaseIterable {
     }
 }
 
+/// How the Transcribe Audio / file queue sends media to a model.
+enum FileTranscriptionStrategy: String, CaseIterable, Codable {
+    /// Whole-file synchronous batch API (Flash sync).
+    case sync
+    /// Temporary cloud upload + asynchronous file transcription (Filetrans).
+    case asynchronous = "async"
+    /// Chunked streaming WebSocket API.
+    case stream
+
+    var displayName: String {
+        switch self {
+        case .sync: return String(localized: "Sync")
+        case .asynchronous: return String(localized: "Async")
+        case .stream: return String(localized: "Stream")
+        }
+    }
+}
+
 enum ModeOutputMode: String, Codable, CaseIterable {
     case paste
     case respond
@@ -75,6 +93,8 @@ struct ModeConfig: Codable, Identifiable, Equatable {
     var selectedPrompt: String?
     var selectedTranscriptionModelName: String?
     var isRealtimeTranscriptionEnabled: Bool = true
+    /// File / Transcribe Audio path only. Independent of mic Real-time.
+    var fileTranscriptionStrategy: FileTranscriptionStrategy = .sync
     var selectedLanguage: String?
     var isTextFormattingEnabled: Bool = false
     var useClipboardContext: Bool
@@ -90,9 +110,10 @@ struct ModeConfig: Codable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, icon, appConfigs, urlConfigs, triggerGroups, triggerWords, isAIEnhancementEnabled,
-            selectedPrompt, isRealtimeTranscriptionEnabled, selectedLanguage, isTextFormattingEnabled,
-            useClipboardContext, useSelectedTextContext, useScreenCapture, selectedAIProvider, selectedAIModel,
-            outputMode, isAutoSendEnabled, autoSendKey, customCommand, isEnabled, isDefault
+            selectedPrompt, isRealtimeTranscriptionEnabled, fileTranscriptionStrategy, selectedLanguage,
+            isTextFormattingEnabled, useClipboardContext, useSelectedTextContext, useScreenCapture,
+            selectedAIProvider, selectedAIModel, outputMode, isAutoSendEnabled, autoSendKey, customCommand,
+            isEnabled, isDefault
         case legacyEmoji = "emoji"
         case selectedWhisperModel
         case selectedTranscriptionModelName
@@ -103,6 +124,7 @@ struct ModeConfig: Codable, Identifiable, Equatable {
         urlConfigs: [URLConfig]? = nil, triggerGroups: [ModeTriggerGroup]? = nil, triggerWords: [String] = [],
         isAIEnhancementEnabled: Bool, selectedPrompt: String? = nil,
         selectedTranscriptionModelName: String? = nil, isRealtimeTranscriptionEnabled: Bool = true,
+        fileTranscriptionStrategy: FileTranscriptionStrategy = .sync,
         selectedLanguage: String? = nil, useClipboardContext: Bool = false, useSelectedTextContext: Bool = true,
         useScreenCapture: Bool = false,
         isTextFormattingEnabled: Bool = false, selectedAIProvider: String? = nil, selectedAIModel: String? = nil,
@@ -128,6 +150,7 @@ struct ModeConfig: Codable, Identifiable, Equatable {
         self.selectedAIModel = selectedAIModel
         self.selectedTranscriptionModelName = selectedTranscriptionModelName
         self.isRealtimeTranscriptionEnabled = isRealtimeTranscriptionEnabled
+        self.fileTranscriptionStrategy = fileTranscriptionStrategy
         self.selectedLanguage = selectedLanguage ?? "en"
         self.isTextFormattingEnabled = isTextFormattingEnabled
         self.isEnabled = isEnabled
@@ -167,6 +190,9 @@ struct ModeConfig: Codable, Identifiable, Equatable {
         selectedPrompt = try container.decodeIfPresent(String.self, forKey: .selectedPrompt)
         isRealtimeTranscriptionEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .isRealtimeTranscriptionEnabled) ?? true
+        fileTranscriptionStrategy =
+            try container.decodeIfPresent(FileTranscriptionStrategy.self, forKey: .fileTranscriptionStrategy)
+            ?? .sync
         selectedLanguage = try container.decodeIfPresent(String.self, forKey: .selectedLanguage)
         isTextFormattingEnabled = try container.decodeIfPresent(Bool.self, forKey: .isTextFormattingEnabled) ?? false
         useClipboardContext =
@@ -220,6 +246,7 @@ struct ModeConfig: Codable, Identifiable, Equatable {
         try container.encode(isAIEnhancementEnabled, forKey: .isAIEnhancementEnabled)
         try container.encodeIfPresent(selectedPrompt, forKey: .selectedPrompt)
         try container.encode(isRealtimeTranscriptionEnabled, forKey: .isRealtimeTranscriptionEnabled)
+        try container.encode(fileTranscriptionStrategy, forKey: .fileTranscriptionStrategy)
         try container.encodeIfPresent(selectedLanguage, forKey: .selectedLanguage)
         try container.encode(isTextFormattingEnabled, forKey: .isTextFormattingEnabled)
         try container.encode(useClipboardContext, forKey: .useClipboardContext)
@@ -237,6 +264,36 @@ struct ModeConfig: Codable, Identifiable, Equatable {
 
     static func == (lhs: ModeConfig, rhs: ModeConfig) -> Bool {
         lhs.id == rhs.id
+    }
+
+    /// Creates a settings-only duplicate with a new identity and no triggers.
+    func makingDuplicate(named name: String, id: UUID = UUID()) -> ModeConfig {
+        ModeConfig(
+            id: id,
+            name: name,
+            icon: icon,
+            appConfigs: nil,
+            urlConfigs: nil,
+            triggerGroups: nil,
+            triggerWords: [],
+            isAIEnhancementEnabled: isAIEnhancementEnabled,
+            selectedPrompt: selectedPrompt,
+            selectedTranscriptionModelName: selectedTranscriptionModelName,
+            isRealtimeTranscriptionEnabled: isRealtimeTranscriptionEnabled,
+            fileTranscriptionStrategy: fileTranscriptionStrategy,
+            selectedLanguage: selectedLanguage,
+            useClipboardContext: useClipboardContext,
+            useSelectedTextContext: useSelectedTextContext,
+            useScreenCapture: useScreenCapture,
+            isTextFormattingEnabled: isTextFormattingEnabled,
+            selectedAIProvider: selectedAIProvider,
+            selectedAIModel: selectedAIModel,
+            outputMode: outputMode,
+            autoSendKey: autoSendKey,
+            customCommand: customCommand,
+            isEnabled: isEnabled,
+            isDefault: false
+        )
     }
 }
 
@@ -329,6 +386,40 @@ class ModeManager: ObservableObject {
         configurations.append(configuration)
         saveConfigurations()
         postShortcutAvailabilityChangeIfNeeded(previousEnabledConfigIds: previousEnabledConfigIds)
+    }
+
+    /// Duplicates a mode's settings into a new mode after the source, clearing triggers and shortcuts.
+    @discardableResult
+    func duplicateConfiguration(from sourceId: UUID) -> ModeConfig? {
+        guard let sourceIndex = configurations.firstIndex(where: { $0.id == sourceId }) else {
+            return nil
+        }
+
+        let source = configurations[sourceIndex]
+        let previousEnabledConfigIds = enabledConfigurationIds
+        let duplicate = source.makingDuplicate(named: uniqueDuplicatedName(basedOn: source.name))
+        configurations.insert(duplicate, at: sourceIndex + 1)
+        saveConfigurations()
+        postShortcutAvailabilityChangeIfNeeded(previousEnabledConfigIds: previousEnabledConfigIds)
+        return duplicate
+    }
+
+    /// Builds a unique name such as "Email Copy", then "Email Copy 2", matching validator exact equality.
+    private func uniqueDuplicatedName(basedOn name: String) -> String {
+        let existingNames = Set(configurations.map(\.name))
+        let baseName = String(format: String(localized: "%@ Copy"), name)
+        if !existingNames.contains(baseName) {
+            return baseName
+        }
+
+        var suffix = 2
+        while true {
+            let candidate = String(format: String(localized: "%@ Copy %lld"), name, suffix)
+            if !existingNames.contains(candidate) {
+                return candidate
+            }
+            suffix += 1
+        }
     }
 
     func removeConfiguration(with id: UUID) -> ModeRemovalResult {

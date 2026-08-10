@@ -83,6 +83,7 @@ enum StarterModeFactory {
             selectedPrompt: template.promptId?.uuidString,
             selectedTranscriptionModelName: transcriptionModelName,
             isRealtimeTranscriptionEnabled: isRealtimeTranscriptionEnabled,
+            fileTranscriptionStrategy: .sync,
             selectedLanguage: selectedLanguage,
             useClipboardContext: template.kind == .email,
             useSelectedTextContext: template.useSelectedTextContext,

@@ -30,6 +30,56 @@ final class Transcription {
     @Attribute(originalName: "powerModeEmoji")
     var modeEmoji: String?
     var transcriptionStatus: String?
+    /// User-marked favorite for History filtering.
+    var isFavorite: Bool = false
+    /// Optional companion video path for synced subtitle playback (`file://...`).
+    var linkedVideoURL: String?
+    /// JSON-encoded `[TranscriptionTimedSentence]` from Filetrans (raw ASR timings).
+    var timedSentencesData: Data?
+    /// JSON-encoded enhanced sentences that reuse raw ASR time windows.
+    var enhancedTimedSentencesData: Data?
+
+    /// Decoded sentence timings, if Filetrans provided them.
+    var timedSentences: [TranscriptionTimedSentence]? {
+        get {
+            guard let timedSentencesData else { return nil }
+            return try? JSONDecoder().decode([TranscriptionTimedSentence].self, from: timedSentencesData)
+        }
+        set {
+            timedSentencesData = newValue.flatMap { try? JSONEncoder().encode($0) }
+        }
+    }
+
+    /// Enhanced sentence texts with original Filetrans begin/end times.
+    var enhancedTimedSentences: [TranscriptionTimedSentence]? {
+        get {
+            guard let enhancedTimedSentencesData else { return nil }
+            return try? JSONDecoder().decode([TranscriptionTimedSentence].self, from: enhancedTimedSentencesData)
+        }
+        set {
+            enhancedTimedSentencesData = newValue.flatMap { try? JSONEncoder().encode($0) }
+        }
+    }
+
+    /// Resolved companion video file URL when the linked path still exists.
+    var resolvedLinkedVideoURL: URL? {
+        guard let linkedVideoURL, !linkedVideoURL.isEmpty else { return nil }
+        let url: URL
+        if let parsed = URL(string: linkedVideoURL), parsed.isFileURL {
+            url = parsed
+        } else {
+            url = URL(fileURLWithPath: linkedVideoURL)
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    /// Prefer enhanced timed sentences when present.
+    var displayTimedSentences: [TranscriptionTimedSentence]? {
+        let sentences = enhancedTimedSentences ?? timedSentences
+        guard let sentences, !sentences.isEmpty else { return nil }
+        return sentences
+    }
 
     init(
         text: String,
@@ -45,7 +95,9 @@ final class Transcription {
         aiRequestUserMessage: String? = nil,
         modeName: String? = nil,
         modeEmoji: String? = nil,
-        transcriptionStatus: TranscriptionStatus = .pending
+        transcriptionStatus: TranscriptionStatus = .pending,
+        timedSentences: [TranscriptionTimedSentence]? = nil,
+        enhancedTimedSentences: [TranscriptionTimedSentence]? = nil
     ) {
         self.id = UUID()
         self.text = text
@@ -63,6 +115,8 @@ final class Transcription {
         self.modeName = modeName
         self.modeEmoji = modeEmoji
         self.transcriptionStatus = transcriptionStatus.rawValue
+        self.timedSentences = timedSentences
+        self.enhancedTimedSentences = enhancedTimedSentences
     }
 
     func markAsCanceledTranscription(
@@ -84,5 +138,9 @@ final class Transcription {
         promptName = nil
         aiRequestSystemMessage = nil
         aiRequestUserMessage = nil
+        timedSentencesData = nil
+        enhancedTimedSentencesData = nil
+        linkedVideoURL = nil
+        isFavorite = false
     }
 }

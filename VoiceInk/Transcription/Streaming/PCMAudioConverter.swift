@@ -16,6 +16,17 @@ enum PCMAudioConverter {
         return samples
     }
 
+    /// Converts normalized float32 mono samples to little-endian PCM16 bytes for streaming providers.
+    static func pcm16Data(fromFloat32Samples samples: [Float]) -> Data {
+        var data = Data(capacity: samples.count * MemoryLayout<Int16>.size)
+        for sample in samples {
+            let clamped = max(-1.0, min(1.0, sample))
+            var value = Int16(clamped * Float(Int16.max)).littleEndian
+            withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
+        }
+        return data
+    }
+
     static func pcmBuffer(fromPCM16Data data: Data) -> AVAudioPCMBuffer? {
         let samples = float32Samples(fromPCM16Data: data)
         guard !samples.isEmpty,

@@ -5,6 +5,8 @@ enum StreamingTranscriptionEvent {
     case sessionStarted
     case partial(text: String)
     case committed(text: String)
+    /// Server has finished the session; no further transcription results are expected.
+    case sessionFinished
     case error(Error)
 }
 

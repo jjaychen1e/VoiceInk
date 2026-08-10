@@ -136,4 +136,20 @@ struct DashScopeProvider: CloudProvider {
         }
         return "qwen3-asr-flash-realtime"
     }
+
+    /// Maps a UI / batch model id to the asynchronous Filetrans model id, if available.
+    static func filetransModelName(for model: String) -> String? {
+        if model.hasPrefix("qwen-audio-3.0-asr") {
+            return "qwen-audio-3.0-asr-flash-filetrans"
+        }
+        if model.hasPrefix("qwen3-asr-flash") {
+            return "qwen3-asr-flash-filetrans"
+        }
+        return nil
+    }
+
+    /// Whether Filetrans for this model uses singular `file_url` (Qwen3) vs `file_urls` (Qwen-Audio style).
+    static func filetransUsesSingularFileURL(_ filetransModel: String) -> Bool {
+        filetransModel.hasPrefix("qwen3-asr-flash-filetrans")
+    }
 }

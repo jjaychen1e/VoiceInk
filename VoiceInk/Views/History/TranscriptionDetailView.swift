@@ -31,6 +31,15 @@ struct TranscriptionDetailView: View {
                             isEnhanced: true
                         )
                     }
+
+                    if let sentences = transcription.enhancedTimedSentences ?? transcription.timedSentences,
+                        !sentences.isEmpty
+                    {
+                        TimedSentencesListView(
+                            sentences: sentences,
+                            usesEnhancedText: transcription.enhancedTimedSentences != nil
+                        )
+                    }
                 }
                 .padding(16)
             }

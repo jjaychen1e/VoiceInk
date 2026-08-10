@@ -195,6 +195,19 @@ enum AIProvider: String, CaseIterable {
             return true
         }
     }
+
+    /// OpenAI-compatible chat completions that can use `response_format: json_object` for timed enhancement.
+    ///
+    /// Gemini / Anthropic / Refine / Ollama / Local CLI are excluded on purpose (personal-use scope).
+    var supportsOpenAICompatibleStructuredJSON: Bool {
+        switch self {
+        case .openAI, .openRouter, .groq, .cerebras, .alibaba, .mistral, .custom:
+            return true
+        case .gemini, .anthropic, .voiceInkRefine, .ollama, .localCLI,
+            .elevenLabs, .deepgram, .soniox, .speechmatics, .assemblyAI:
+            return false
+        }
+    }
 }
 
 struct OllamaRefreshResult {

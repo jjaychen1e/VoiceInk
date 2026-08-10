@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AppSidebar: View {
     @Binding var selectedView: ViewType
+    @EnvironmentObject private var menuBarManager: MenuBarManager
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -46,7 +47,10 @@ struct AppSidebar: View {
             ForEach(items) { viewType in
                 SidebarItemButton(
                     viewType: viewType,
-                    isSelected: selectedView == viewType
+                    isSelected: selectedView == viewType,
+                    onOpenHistoryWindow: viewType == .history
+                        ? { menuBarManager.openHistoryWindow() }
+                        : nil
                 ) {
                     selectedView = viewType
                 }
@@ -134,10 +138,12 @@ private struct SidebarIconStyle {
 private struct SidebarItemButton: View {
     let viewType: ViewType
     let isSelected: Bool
+    /// Opens the dedicated History window; only set for the History sidebar row.
+    var onOpenHistoryWindow: (() -> Void)? = nil
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        let button = Button(action: action) {
             HStack(spacing: 9) {
                 SidebarIconTile(
                     systemName: viewType.icon,
@@ -163,6 +169,14 @@ private struct SidebarItemButton: View {
         .accessibilityLabel(viewType.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .animation(.easeInOut(duration: 0.12), value: isSelected)
+
+        if let onOpenHistoryWindow {
+            button.contextMenu {
+                Button("Open History Window", action: onOpenHistoryWindow)
+            }
+        } else {
+            button
+        }
     }
 
     private var rowBackground: some View {

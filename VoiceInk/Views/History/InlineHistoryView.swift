@@ -3,7 +3,9 @@ import SwiftUI
 
 struct InlineHistoryView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var menuBarManager: MenuBarManager
     @State private var searchText = ""
+    @State private var showFavoritesOnly = false
     @State private var expandedId: UUID?
     @State private var selectedTranscriptions: Set<Transcription> = []
     @State private var showDeleteConfirmation = false
@@ -31,31 +33,12 @@ struct InlineHistoryView: View {
     }
 
     private func cursorQueryDescriptor(after timestamp: Date? = nil) -> FetchDescriptor<Transcription> {
-        var descriptor = FetchDescriptor<Transcription>(
-            sortBy: [SortDescriptor(\Transcription.timestamp, order: .reverse)]
+        TranscriptionHistoryQuery.cursorDescriptor(
+            searchText: searchText,
+            favoritesOnly: showFavoritesOnly,
+            after: timestamp,
+            pageSize: pageSize
         )
-
-        if let timestamp = timestamp {
-            if !searchText.isEmpty {
-                descriptor.predicate = #Predicate<Transcription> { transcription in
-                    (transcription.text.localizedStandardContains(searchText)
-                        || (transcription.enhancedText?.localizedStandardContains(searchText) ?? false))
-                        && transcription.timestamp < timestamp
-                }
-            } else {
-                descriptor.predicate = #Predicate<Transcription> { transcription in
-                    transcription.timestamp < timestamp
-                }
-            }
-        } else if !searchText.isEmpty {
-            descriptor.predicate = #Predicate<Transcription> { transcription in
-                transcription.text.localizedStandardContains(searchText)
-                    || (transcription.enhancedText?.localizedStandardContains(searchText) ?? false)
-            }
-        }
-
-        descriptor.fetchLimit = pageSize
-        return descriptor
     }
 
     private var allSelected: Bool {
@@ -133,6 +116,12 @@ struct InlineHistoryView: View {
                 await loadInitialContent()
             }
         }
+        .onChange(of: showFavoritesOnly) { _, _ in
+            Task {
+                await resetPagination()
+                await loadInitialContent()
+            }
+        }
         .onChange(of: latestTranscriptionIndicator.first?.id) { oldId, newId in
             guard isViewCurrentlyVisible else { return }
             if newId != oldId {
@@ -163,6 +152,26 @@ struct InlineHistoryView: View {
                     .fill(AppTheme.Surface.card)
             )
             .frame(maxWidth: .infinity)
+
+            AppIconButton(
+                systemName: showFavoritesOnly ? "star.fill" : "star",
+                help: showFavoritesOnly ? "Show All" : "Show Favorites Only",
+                size: 30,
+                iconSize: 13,
+                cornerRadius: AppTheme.Radius.pill
+            ) {
+                showFavoritesOnly.toggle()
+            }
+
+            AppIconButton(
+                systemName: "macwindow",
+                help: "Open in Window",
+                size: 30,
+                iconSize: 13,
+                cornerRadius: AppTheme.Radius.pill
+            ) {
+                menuBarManager.openHistoryWindow()
+            }
 
             AppIconButton(
                 systemName: "gearshape",
@@ -246,10 +255,19 @@ struct InlineHistoryView: View {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 40))
                 .foregroundColor(.secondary)
-            Text(searchText.isEmpty ? "No transcriptions yet" : "No results found")
+            Text(
+                showFavoritesOnly
+                    ? "No favorites yet"
+                    : (searchText.isEmpty ? "No transcriptions yet" : "No results found")
+            )
                 .font(.system(size: 16, weight: .medium))
                 .foregroundColor(.secondary)
-            Text(searchText.isEmpty ? "Your transcription history will appear here" : "Try a different search term")
+            Text(
+                showFavoritesOnly
+                    ? "Star a transcription to see it here"
+                    : (searchText.isEmpty
+                        ? "Your transcription history will appear here" : "Try a different search term")
+            )
                 .font(.system(size: 13))
                 .foregroundColor(.secondary.opacity(0.8))
             Spacer()
@@ -273,6 +291,7 @@ struct InlineHistoryView: View {
                             }
                         },
                         onToggleCheck: { toggleSelection(transcription) },
+                        onToggleFavorite: { toggleFavorite(transcription) },
                         onShowInfo: {
                             openPanel(mode: .info, transcriptionID: transcription.id)
                         }
@@ -432,18 +451,27 @@ struct InlineHistoryView: View {
         }
     }
 
+    private func toggleFavorite(_ transcription: Transcription) {
+        transcription.isFavorite.toggle()
+        do {
+            try modelContext.save()
+        } catch {
+            print("Error saving favorite: \(error.localizedDescription)")
+        }
+        if showFavoritesOnly && !transcription.isFavorite {
+            Task {
+                await resetPagination()
+                await loadInitialContent()
+            }
+        }
+    }
+
     private func selectAllTranscriptions() async {
         do {
-            var allDescriptor = FetchDescriptor<Transcription>()
-
-            if !searchText.isEmpty {
-                allDescriptor.predicate = #Predicate<Transcription> { transcription in
-                    transcription.text.localizedStandardContains(searchText)
-                        || (transcription.enhancedText?.localizedStandardContains(searchText) ?? false)
-                }
-            }
-
-            allDescriptor.propertiesToFetch = [\.id]
+            let allDescriptor = TranscriptionHistoryQuery.matchingAllDescriptor(
+                searchText: searchText,
+                favoritesOnly: showFavoritesOnly
+            )
             let allTranscriptions = try modelContext.fetch(allDescriptor)
             let visibleIds = Set(displayedTranscriptions.map { $0.id })
 
@@ -476,6 +504,7 @@ private struct HistoryCardRow: View {
     let isChecked: Bool
     let onToggleExpand: () -> Void
     let onToggleCheck: () -> Void
+    let onToggleFavorite: () -> Void
     let onShowInfo: () -> Void
 
     @State private var selectedTab: TranscriptionTab = .original
@@ -497,6 +526,12 @@ private struct HistoryCardRow: View {
             return true
         }
         return false
+    }
+
+    private var timedSentences: [TranscriptionTimedSentence]? {
+        let sentences = transcription.enhancedTimedSentences ?? transcription.timedSentences
+        guard let sentences, !sentences.isEmpty else { return nil }
+        return sentences
     }
 
     var body: some View {
@@ -526,6 +561,14 @@ private struct HistoryCardRow: View {
                 }
 
                 Spacer()
+
+                Button(action: onToggleFavorite) {
+                    Image(systemName: transcription.isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(transcription.isFavorite ? Color.yellow : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(transcription.isFavorite ? "Remove from Favorites" : "Add to Favorites")
 
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
@@ -572,15 +615,26 @@ private struct HistoryCardRow: View {
                 }
             }
 
+            // One scroll region for text + timestamps (matches separate History window).
+            // Avoid stacking two max-height panels that fight for vertical space.
             ScrollView {
-                MarkdownContentView(
-                    displayText,
-                    fontSize: 14,
-                    foregroundColor: AppTheme.Text.primary
-                )
+                VStack(alignment: .leading, spacing: 12) {
+                    MarkdownContentView(
+                        displayText,
+                        fontSize: 14,
+                        foregroundColor: AppTheme.Text.primary
+                    )
+                    .hoverCopyButton(textToCopy: displayText)
+
+                    if let sentences = timedSentences {
+                        TimedSentencesListView(
+                            sentences: sentences,
+                            usesEnhancedText: transcription.enhancedTimedSentences != nil
+                        )
+                    }
+                }
             }
-            .frame(maxHeight: 350)
-            .hoverCopyButton(textToCopy: displayText)
+            .frame(maxHeight: 480)
 
             if hasAudioFile, let urlString = transcription.audioFileURL,
                 let url = URL(string: urlString)

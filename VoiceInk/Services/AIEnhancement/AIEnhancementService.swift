@@ -10,6 +10,24 @@ struct AIEnhancementResult: Sendable {
     let promptName: String?
     let systemMessage: String?
     let userMessage: String?
+    /// Enhanced sentences reusing Filetrans time windows (OpenAI-compatible timed path only).
+    let timedSentences: [TranscriptionTimedSentence]?
+
+    init(
+        text: String,
+        duration: TimeInterval,
+        promptName: String?,
+        systemMessage: String?,
+        userMessage: String?,
+        timedSentences: [TranscriptionTimedSentence]? = nil
+    ) {
+        self.text = text
+        self.duration = duration
+        self.promptName = promptName
+        self.systemMessage = systemMessage
+        self.userMessage = userMessage
+        self.timedSentences = timedSentences
+    }
 }
 
 @MainActor
@@ -187,7 +205,8 @@ class AIEnhancementService: ObservableObject {
     private func makeRequest(
         text: String,
         configuration: EnhancementRuntimeConfiguration,
-        contextSnapshot: RecordingContextSnapshot?
+        contextSnapshot: RecordingContextSnapshot?,
+        timeout: TimeInterval
     ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
         guard isConfigured(for: configuration) else {
             throw EnhancementError.notConfigured
@@ -240,7 +259,7 @@ class AIEnhancementService: ObservableObject {
                     text: formattedText,
                     systemPrompt: systemMessage,
                     model: modelName,
-                    timeout: baseTimeout
+                    timeout: timeout
                 )
                 return (
                     AIEnhancementOutputFilter.filter(result),
@@ -294,7 +313,7 @@ class AIEnhancementService: ObservableObject {
                     systemPrompt: systemMessage,
                     thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: modelName),
                     store: false,
-                    timeout: baseTimeout
+                    timeout: timeout
                 )
             case .anthropic:
                 result = try await AnthropicLLMClient.chatCompletion(
@@ -302,7 +321,7 @@ class AIEnhancementService: ObservableObject {
                     model: modelName,
                     messages: [.user(formattedText)],
                     systemPrompt: systemMessage,
-                    timeout: baseTimeout
+                    timeout: timeout
                 )
             case .custom:
                 guard
@@ -319,7 +338,7 @@ class AIEnhancementService: ObservableObject {
                     systemPrompt: systemMessage,
                     temperature: customConfiguration.temperature,
                     reasoningEffort: customConfiguration.reasoningEffort,
-                    timeout: baseTimeout
+                    timeout: timeout
                 )
             default:
                 guard let baseURL = URL(string: provider.baseURL) else {
@@ -344,7 +363,7 @@ class AIEnhancementService: ObservableObject {
                     temperature: temperature,
                     reasoningEffort: reasoningEffort,
                     extraBody: extraBody,
-                    timeout: baseTimeout
+                    timeout: timeout
                 )
             }
             return (
@@ -401,10 +420,161 @@ class AIEnhancementService: ObservableObject {
         UserDefaults.standard.bool(forKey: "EnhancementRetryOnTimeout")
     }
 
+    private static let jsonObjectResponseFormat: [String: Any] = [
+        "response_format": ["type": "json_object"]
+    ]
+
+    /// OpenAI-compatible timed JSON enhancement with the same retry policy as plain enhance.
+    private func makeTimedJSONRequestWithRetry(
+        userMessage: String,
+        configuration: EnhancementRuntimeConfiguration,
+        contextSnapshot: RecordingContextSnapshot?,
+        timeout: TimeInterval,
+        maxRetries: Int = 3,
+        initialDelay: TimeInterval = 1.0
+    ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
+        var retries = 0
+        var currentDelay = initialDelay
+
+        while retries < maxRetries {
+            do {
+                return try await makeTimedJSONRequest(
+                    userMessage: userMessage,
+                    configuration: configuration,
+                    contextSnapshot: contextSnapshot,
+                    timeout: timeout
+                )
+            } catch let error as EnhancementError {
+                switch error {
+                case .networkError, .serverError, .rateLimitExceeded:
+                    retries += 1
+                    if retries < maxRetries {
+                        try await Task.sleep(nanoseconds: UInt64(currentDelay * 1_000_000_000))
+                        currentDelay *= 2
+                    } else {
+                        throw error
+                    }
+                case .timeout:
+                    if retryOnTimeout {
+                        retries += 1
+                        if retries >= maxRetries {
+                            throw error
+                        }
+                    } else {
+                        throw error
+                    }
+                default:
+                    throw error
+                }
+            } catch {
+                throw error
+            }
+        }
+        throw EnhancementError.enhancementFailed
+    }
+
+    /// Calls only OpenAI-compatible providers with `response_format: json_object`.
+    private func makeTimedJSONRequest(
+        userMessage: String,
+        configuration: EnhancementRuntimeConfiguration,
+        contextSnapshot: RecordingContextSnapshot?,
+        timeout: TimeInterval
+    ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
+        guard isConfigured(for: configuration) else {
+            throw EnhancementError.notConfigured
+        }
+        guard let provider = configuration.provider,
+            provider.supportsOpenAICompatibleStructuredJSON
+        else {
+            throw EnhancementError.notConfigured
+        }
+        guard let prompt = configuration.prompt else {
+            throw EnhancementError.notConfigured
+        }
+
+        let modelName = configuration.modelName ?? provider.defaultModel
+        let baseSystem = await getSystemMessage(
+            prompt: prompt,
+            configuration: configuration,
+            contextSnapshot: contextSnapshot
+        )
+        let systemMessage = [baseSystem, TimedSentenceEnhancement.systemAddon]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+
+        try await waitForRateLimit()
+
+        do {
+            let result: String
+            if provider == .custom {
+                guard
+                    let customConfiguration = CustomAIProviderManager.shared.requestConfiguration(forModel: modelName),
+                    let baseURL = URL(string: customConfiguration.baseURL)
+                else {
+                    throw EnhancementError.notConfigured
+                }
+                result = try await OptionalTemperatureOpenAIClient.chatCompletion(
+                    baseURL: baseURL,
+                    apiKey: customConfiguration.apiKey,
+                    model: customConfiguration.modelName,
+                    messages: [.user(userMessage)],
+                    systemPrompt: systemMessage,
+                    temperature: customConfiguration.temperature,
+                    reasoningEffort: customConfiguration.reasoningEffort,
+                    extraBody: Self.jsonObjectResponseFormat,
+                    timeout: timeout
+                )
+            } else {
+                guard let baseURL = URL(string: provider.baseURL) else {
+                    throw EnhancementError.customError(
+                        "\(provider.rawValue) has an invalid API endpoint URL.")
+                }
+                let temperature = modelName.lowercased().hasPrefix("gpt-5") ? 1.0 : 0.3
+                let reasoningEffort = ReasoningConfig.getReasoningParameter(
+                    for: provider,
+                    modelName: modelName
+                )
+                var extraBody = ReasoningConfig.getExtraBodyParameters(
+                    for: provider,
+                    modelName: modelName
+                ) ?? [:]
+                for (key, value) in Self.jsonObjectResponseFormat {
+                    extraBody[key] = value
+                }
+                result = try await OpenAILLMClient.chatCompletion(
+                    baseURL: baseURL,
+                    apiKey: try apiKey(for: provider, modelName: modelName),
+                    model: modelName,
+                    messages: [.user(userMessage)],
+                    systemPrompt: systemMessage,
+                    temperature: temperature,
+                    reasoningEffort: reasoningEffort,
+                    extraBody: extraBody,
+                    timeout: timeout
+                )
+            }
+
+            return (
+                AIEnhancementOutputFilter.filter(
+                    result.trimmingCharacters(in: .whitespacesAndNewlines)
+                ),
+                systemMessage,
+                userMessage
+            )
+        } catch let error as LLMKitError {
+            throw mapLLMKitError(error)
+        } catch let error as EnhancementError {
+            throw error
+        } catch {
+            throw EnhancementError.customError(error.localizedDescription)
+        }
+    }
+
     private func makeRequestWithRetry(
         text: String,
         configuration: EnhancementRuntimeConfiguration,
         contextSnapshot: RecordingContextSnapshot?,
+        timeout: TimeInterval,
         maxRetries: Int = 3,
         initialDelay: TimeInterval = 1.0
     ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
@@ -416,7 +586,8 @@ class AIEnhancementService: ObservableObject {
                 return try await makeRequest(
                     text: text,
                     configuration: configuration,
-                    contextSnapshot: contextSnapshot
+                    contextSnapshot: contextSnapshot,
+                    timeout: timeout
                 )
             } catch let error as EnhancementError {
                 switch error {
@@ -479,16 +650,19 @@ class AIEnhancementService: ObservableObject {
     func enhance(
         _ text: String,
         configuration: EnhancementRuntimeConfiguration,
-        contextSnapshot: RecordingContextSnapshot? = nil
+        contextSnapshot: RecordingContextSnapshot? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> AIEnhancementResult {
         let startTime = Date()
         let promptName = configuration.prompt?.title
+        let resolvedTimeout = timeout ?? baseTimeout
 
         do {
             let requestResult = try await makeRequestWithRetry(
                 text: text,
                 configuration: configuration,
-                contextSnapshot: contextSnapshot
+                contextSnapshot: contextSnapshot,
+                timeout: resolvedTimeout
             )
             let endTime = Date()
             let duration = endTime.timeIntervalSince(startTime)
@@ -506,6 +680,62 @@ class AIEnhancementService: ObservableObject {
             let duration = Date().timeIntervalSince(startTime)
             logger.error(
                 "Enhancement failed provider=\(providerName, privacy: .public) model=\(modelName, privacy: .public) duration=\(duration, format: .fixed(precision: 3), privacy: .public)s: \(errorDescription, privacy: .public)"
+            )
+            throw error
+        }
+    }
+
+    /// Enhances Filetrans sentences via OpenAI-compatible batch JSON; times stay on the original windows.
+    func enhanceTimedSentences(
+        _ sentences: [TranscriptionTimedSentence],
+        configuration: EnhancementRuntimeConfiguration,
+        contextSnapshot: RecordingContextSnapshot? = nil,
+        timeout: TimeInterval? = nil
+    ) async throws -> AIEnhancementResult {
+        guard !sentences.isEmpty else {
+            throw EnhancementError.customError("No timed sentences to enhance.")
+        }
+        guard let provider = configuration.provider else {
+            throw EnhancementError.notConfigured
+        }
+        guard provider.supportsOpenAICompatibleStructuredJSON else {
+            throw EnhancementError.customError(
+                "Timed enhancement requires an OpenAI-compatible provider (not \(provider.rawValue))."
+            )
+        }
+
+        let startTime = Date()
+        let promptName = configuration.prompt?.title
+        let resolvedTimeout = timeout ?? baseTimeout
+        let userMessage = try TimedSentenceEnhancement.userMessage(for: sentences)
+
+        do {
+            let requestResult = try await makeTimedJSONRequestWithRetry(
+                userMessage: userMessage,
+                configuration: configuration,
+                contextSnapshot: contextSnapshot,
+                timeout: resolvedTimeout
+            )
+            let enhancedSentences = try TimedSentenceEnhancement.parse(
+                response: requestResult.text,
+                originalSentences: sentences
+            )
+            let joined = TimedSentenceEnhancement.joinedText(from: enhancedSentences)
+            guard !joined.isEmpty else {
+                throw EnhancementError.enhancementFailed
+            }
+            return AIEnhancementResult(
+                text: joined,
+                duration: Date().timeIntervalSince(startTime),
+                promptName: promptName,
+                systemMessage: requestResult.systemMessage,
+                userMessage: requestResult.userMessage,
+                timedSentences: enhancedSentences
+            )
+        } catch {
+            let errorDescription = EnhancementFailureFormatter.description(for: error)
+            logger.error(
+                "Timed enhancement failed provider=\(provider.rawValue, privacy: .public): \(errorDescription, privacy: .public)"
             )
             throw error
         }

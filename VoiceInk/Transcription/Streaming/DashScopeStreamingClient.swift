@@ -5,6 +5,7 @@ enum DashScopeStreamingClientEvent: Sendable {
     case sessionStarted
     case partial(text: String)
     case committed(text: String)
+    case sessionFinished
     case error(String)
 }
 
@@ -211,6 +212,7 @@ actor DashScopeStreamingClient {
 
         case "session.finished":
             isConnected = false
+            eventsContinuation.yield(.sessionFinished)
 
         default:
             break

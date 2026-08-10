@@ -5,6 +5,8 @@ struct TranscriptionRuntimeConfiguration {
     let model: any TranscriptionModel
     let language: String
     let isRealtimeEnabled: Bool
+    /// Resolved file-queue strategy (Sync / Async / Stream).
+    let fileStrategy: FileTranscriptionStrategy
 
     var metadata: (name: String?, emoji: String?) {
         guard mode.isEnabled else {
@@ -19,6 +21,9 @@ struct TranscriptionRuntimeConfiguration {
             prompt: model.provider == .whisper ? UserDefaults.standard.string(forKey: "TranscriptionPrompt") : nil
         )
     }
+
+    var fileUsesStreaming: Bool { fileStrategy == .stream }
+    var fileUsesAsync: Bool { fileStrategy == .asynchronous }
 }
 
 struct TranscriptionFormattingConfiguration {
@@ -128,7 +133,9 @@ enum ModeRuntimeResolver {
             model: model,
             language: language,
             isRealtimeEnabled: TranscriptionRealtimeSupport.isEnabled(
-                for: model, modeValue: mode.isRealtimeTranscriptionEnabled)
+                for: model, modeValue: mode.isRealtimeTranscriptionEnabled),
+            fileStrategy: TranscriptionFileSupport.resolved(
+                mode.fileTranscriptionStrategy, for: model)
         )
     }
 

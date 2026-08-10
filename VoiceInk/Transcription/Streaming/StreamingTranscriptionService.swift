@@ -125,6 +125,8 @@ class StreamingTranscriptionService {
     private var stopStartedAt: Date?
     private var firstPartialLogged = false
     private var firstCommitLogged = false
+    /// Completes stop wait after a quiet period of commits when the provider never sends sessionFinished.
+    private var commitDebounceTask: Task<Void, Never>?
 
     init(
         modelContext: ModelContext, fluidAudioService: FluidAudioTranscriptionService? = nil,
@@ -143,7 +145,7 @@ class StreamingTranscriptionService {
         commitSignal?.finish()
     }
 
-    /// Signal used to notify `waitForFinalCommit` when a new committed segment arrives.
+    /// Signal used to notify `waitForFinalization` when stop can complete.
     private var commitSignal: AsyncStream<Void>.Continuation?
 
     /// Whether the streaming connection is fully established and actively sending.
@@ -192,6 +194,56 @@ class StreamingTranscriptionService {
         }
     }
 
+    /// Sends precomputed PCM16 audio for file transcription without dropping buffered mic chunks.
+    ///
+    /// Unlike `sendAudioChunk`, this awaits provider delivery so large files are not truncated by
+    /// the realtime mic buffer policy.
+    /// - Parameters:
+    ///   - data: Little-endian PCM16 mono @ 16 kHz.
+    ///   - chunkByteCount: Bytes per WebSocket frame (default ~100 ms of audio).
+    ///   - realtimePacing: When true, sleeps to match audio duration so VAD/streaming servers keep up.
+    func streamPCM16Audio(
+        _ data: Data,
+        chunkByteCount: Int = 3_200,
+        realtimePacing: Bool = false
+    ) async throws {
+        guard let provider = provider, state == .streaming else {
+            throw StreamingTranscriptionError.notConnected
+        }
+
+        let bytesPerSecond = 16_000 * MemoryLayout<Int16>.size
+        let alignedCount = data.count - (data.count % MemoryLayout<Int16>.size)
+        var offset = 0
+        while offset < alignedCount {
+            try Task.checkCancellation()
+            var end = min(offset + chunkByteCount, alignedCount)
+            if (end - offset) % MemoryLayout<Int16>.size != 0 {
+                end -= 1
+            }
+            guard end > offset else { break }
+
+            let chunk = data.subdata(in: offset..<end)
+            metrics.recordReceived(chunk.count)
+            let sendStarted = ContinuousClock.now
+            try await provider.sendAudioChunk(chunk)
+            metrics.recordSent(chunk.count)
+
+            if realtimePacing {
+                let chunkSeconds = Double(chunk.count) / Double(bytesPerSecond)
+                let elapsed = sendStarted.duration(to: .now)
+                let elapsedSeconds =
+                    Double(elapsed.components.seconds)
+                    + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000_000
+                let remaining = chunkSeconds - elapsedSeconds
+                if remaining > 0.001 {
+                    try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
+            }
+
+            offset = end
+        }
+    }
+
     /// Stops streaming and follows the provider's requested finalization path.
     func stopAndFinalize() async throws -> StreamingStopResult {
         guard let provider = provider, state == .streaming else {
@@ -213,13 +265,15 @@ class StreamingTranscriptionService {
         )
 
         // Finish the chunk source so the send loop drains remaining chunks and exits naturally.
+        // Segments may still arrive here; do not arm the completion signal yet or a mid-drain
+        // committed event could finish the wait before finish-task / sessionFinished.
         await drainRemainingChunks()
 
-        // Set up the commit signal BEFORE sending commit to avoid a race with the response.
+        // Arm the completion signal before commit/finish-task so the final response is not lost.
         let (signalStream, signalContinuation) = AsyncStream.makeStream(of: Void.self)
         self.commitSignal = signalContinuation
 
-        // Send commit to finalize any remaining audio
+        // Send commit/finish-task to finalize any remaining audio.
         do {
             try await provider.commit()
         } catch {
@@ -231,8 +285,8 @@ class StreamingTranscriptionService {
             throw error
         }
 
-        // Wait for the server to acknowledge our commit (or timeout)
-        let finalText = await waitForFinalCommit(signalStream: signalStream)
+        // Wait for a post-stop committed result and/or sessionFinished (or timeout).
+        let finalText = await waitForFinalization(signalStream: signalStream)
         if let stopStartedAt {
             logger.notice(
                 "Streaming stop completed elapsed=\(Date().timeIntervalSince(stopStartedAt), format: .fixed(precision: 3), privacy: .public)s finalChars=\(finalText.count, privacy: .public)"
@@ -256,6 +310,8 @@ class StreamingTranscriptionService {
         chunkSource.finish()
 
         // Clean up commit signal if waiting
+        commitDebounceTask?.cancel()
+        commitDebounceTask = nil
         commitSignal?.finish()
         commitSignal = nil
 
@@ -360,7 +416,10 @@ class StreamingTranscriptionService {
                             self.onPartialTranscript?(self.committedSegments.joined(separator: " "))
                         }
                         if self.state == .committing {
-                            self.commitSignal?.yield()
+                            // Do not finish on the first sentence_end — VAD models emit many
+                            // commits per file. Debounce until results go quiet, or wait for
+                            // sessionFinished (preferred).
+                            self.scheduleCommitDebounce()
                         }
                     }
                 case .partial(let text):
@@ -385,6 +444,18 @@ class StreamingTranscriptionService {
                     }
                 case .sessionStarted:
                     break
+                case .sessionFinished:
+                    await MainActor.run {
+                        if self.state == .committing {
+                            let elapsed = self.stopStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+                            self.logger.notice(
+                                "Streaming sessionFinished stopElapsed=\(elapsed, format: .fixed(precision: 3), privacy: .public)s segments=\(self.committedSegments.count, privacy: .public)"
+                            )
+                            self.commitDebounceTask?.cancel()
+                            self.commitDebounceTask = nil
+                            self.commitSignal?.yield()
+                        }
+                    }
                 case .error(let error):
                     await MainActor.run {
                         self.logger.error("Streaming event error: \(error, privacy: .public)")
@@ -394,9 +465,22 @@ class StreamingTranscriptionService {
         }
     }
 
-    /// Waits for the server to acknowledge our explicit commit, with a 10-second timeout.
-    private func waitForFinalCommit(signalStream: AsyncStream<Void>) async -> String {
-        // Race: wait for commit acknowledgment vs timeout
+    /// After stop, waits for a quiet period of commits when the provider never sends sessionFinished.
+    private func scheduleCommitDebounce() {
+        commitDebounceTask?.cancel()
+        commitDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled, state == .committing else { return }
+            logger.notice(
+                "Streaming commit debounce fired segments=\(self.committedSegments.count, privacy: .public)"
+            )
+            commitSignal?.yield()
+        }
+    }
+
+    /// Waits for stop finalization: sessionFinished (preferred) or a quiet commit period, with timeout.
+    private func waitForFinalization(signalStream: AsyncStream<Void>) async -> String {
+        // Race: wait for completion signal vs timeout
         let receivedInTime = await withTaskGroup(of: Bool.self) { group in
             group.addTask { @MainActor in
                 for await _ in signalStream {
@@ -406,7 +490,7 @@ class StreamingTranscriptionService {
             }
 
             group.addTask {
-                try? await Task.sleep(nanoseconds: 10_000_000_000)  // 10 seconds
+                try? await Task.sleep(nanoseconds: 30_000_000_000)  // 30 seconds
                 return false
             }
 
@@ -419,6 +503,8 @@ class StreamingTranscriptionService {
         )
 
         // Clean up the signal
+        commitDebounceTask?.cancel()
+        commitDebounceTask = nil
         commitSignal?.finish()
         commitSignal = nil
 
@@ -431,6 +517,8 @@ class StreamingTranscriptionService {
 
     private func cleanupStreaming() async {
         onPartialTranscript = nil
+        commitDebounceTask?.cancel()
+        commitDebounceTask = nil
         eventConsumerTask?.cancel()
         eventConsumerTask = nil
         sendTask?.cancel()

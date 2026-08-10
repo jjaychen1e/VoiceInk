@@ -52,6 +52,7 @@ struct ModeEmptyStateView: View {
 struct ModeConfigurationsGrid: View {
     @ObservedObject var modeManager: ModeManager
     let onEditConfig: (ModeConfig) -> Void
+    let onDuplicateConfig: (ModeConfig) -> Void
     @EnvironmentObject var enhancementService: AIEnhancementService
 
     var body: some View {
@@ -61,7 +62,8 @@ struct ModeConfigurationsGrid: View {
                     config: $config,
                     isEditing: false,
                     modeManager: modeManager,
-                    onEditConfig: onEditConfig
+                    onEditConfig: onEditConfig,
+                    onDuplicateConfig: onDuplicateConfig
                 )
             }
         }
@@ -107,6 +109,7 @@ struct ConfigurationRow: View {
     let isEditing: Bool
     let modeManager: ModeManager
     let onEditConfig: (ModeConfig) -> Void
+    let onDuplicateConfig: (ModeConfig) -> Void
     @EnvironmentObject var enhancementService: AIEnhancementService
     @EnvironmentObject var transcriptionModelManager: TranscriptionModelManager
     @State private var isHovering = false
@@ -431,6 +434,19 @@ struct ConfigurationRow: View {
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) {
                 isHovering = hovering
+            }
+        }
+        .contextMenu {
+            Button {
+                onEditConfig(config)
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+
+            Button {
+                onDuplicateConfig(config)
+            } label: {
+                Label("Duplicate", systemImage: "doc.on.doc")
             }
         }
     }

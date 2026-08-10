@@ -67,9 +67,42 @@ class AudioTranscriptionService: ObservableObject {
             )
             let modeName = (mode?.isEnabled == true) ? mode?.name : nil
             let modeEmoji = (mode?.isEnabled == true) ? mode?.icon.value : nil
+            let fileStrategy = TranscriptionFileSupport.resolved(
+                mode?.fileTranscriptionStrategy ?? .sync, for: model)
 
             let transcriptionStart = Date()
-            var text = try await serviceRegistry.transcribe(audioURL: url, model: model, context: requestContext)
+            var text: String
+            var timedSentences: [TranscriptionTimedSentence]?
+            switch fileStrategy {
+            case .stream:
+                let audioProcessor = AudioProcessor()
+                let samples = try await audioProcessor.processAudioToSamples(url)
+                text = try await FileStreamingTranscriber.transcribe(
+                    samples: samples,
+                    model: model,
+                    context: requestContext,
+                    modelContext: modelContext,
+                    fluidAudioService: serviceRegistry.fluidAudioTranscriptionService,
+                    batchFallback: {
+                        try await self.serviceRegistry.transcribe(
+                            audioURL: url, model: model, context: requestContext)
+                    }
+                )
+            case .asynchronous:
+                guard let apiKey = APIKeyManager.shared.getAPIKey(forProvider: "Alibaba"), !apiKey.isEmpty else {
+                    throw CloudTranscriptionError.missingAPIKey
+                }
+                let filetransResult = try await DashScopeFiletransClient.transcribe(
+                    audioURL: url,
+                    apiKey: apiKey,
+                    model: model.name,
+                    language: language
+                )
+                text = filetransResult.text
+                timedSentences = filetransResult.sentences.isEmpty ? nil : filetransResult.sentences
+            case .sync:
+                text = try await serviceRegistry.transcribe(audioURL: url, model: model, context: requestContext)
+            }
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
             text = TranscriptionOutputFilter.filter(text)
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -123,9 +156,18 @@ class AudioTranscriptionService: ObservableObject {
                 enhancementService.isConfigured(for: enhancementConfiguration)
             {
                 do {
-                    let enhancementResult = try await enhancementService.enhance(
-                        text,
-                        configuration: enhancementConfiguration
+                    let storedTimeout = UserDefaults.standard.integer(forKey: "EnhancementTimeoutSeconds")
+                    let baseTimeout = storedTimeout > 0 ? TimeInterval(storedTimeout) : 7
+                    let enhancementTimeout = EnhancementTimeoutPolicy.forFileTranscription(
+                        text: cleanedText,
+                        baseTimeout: baseTimeout
+                    )
+                    let enhancementResult = try await FileTranscriptionEnhancer.enhance(
+                        text: text,
+                        timedSentences: timedSentences,
+                        service: enhancementService,
+                        configuration: enhancementConfiguration,
+                        timeout: enhancementTimeout
                     )
                     let newTranscription = Transcription(
                         text: originalText,
@@ -141,7 +183,9 @@ class AudioTranscriptionService: ObservableObject {
                         aiRequestSystemMessage: enhancementResult.systemMessage,
                         aiRequestUserMessage: enhancementResult.userMessage,
                         modeName: modeName,
-                        modeEmoji: modeEmoji
+                        modeEmoji: modeEmoji,
+                        timedSentences: timedSentences,
+                        enhancedTimedSentences: enhancementResult.timedSentences
                     )
                     modelContext.insert(newTranscription)
                     do {
@@ -171,7 +215,8 @@ class AudioTranscriptionService: ObservableObject {
                         promptName: nil,
                         transcriptionDuration: transcriptionDuration,
                         modeName: modeName,
-                        modeEmoji: modeEmoji
+                        modeEmoji: modeEmoji,
+                        timedSentences: timedSentences
                     )
                     modelContext.insert(newTranscription)
                     do {
@@ -200,7 +245,8 @@ class AudioTranscriptionService: ObservableObject {
                     promptName: nil,
                     transcriptionDuration: transcriptionDuration,
                     modeName: modeName,
-                    modeEmoji: modeEmoji
+                    modeEmoji: modeEmoji,
+                    timedSentences: timedSentences
                 )
                 modelContext.insert(newTranscription)
                 do {

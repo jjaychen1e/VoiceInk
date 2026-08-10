@@ -17,6 +17,7 @@ enum OptionalTemperatureOpenAIClient {
         systemPrompt: String? = nil,
         temperature: Double? = nil,
         reasoningEffort: String? = nil,
+        extraBody: [String: Any]? = nil,
         timeout: TimeInterval = 30
     ) async throws -> String {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,6 +46,11 @@ enum OptionalTemperatureOpenAIClient {
         }
         if let reasoningEffort {
             bodyDict["reasoning_effort"] = reasoningEffort
+        }
+        if let extraBody {
+            for (key, value) in extraBody {
+                bodyDict[key] = value
+            }
         }
 
         guard let body = try? JSONSerialization.data(withJSONObject: bodyDict) else {

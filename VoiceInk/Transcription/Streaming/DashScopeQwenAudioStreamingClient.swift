@@ -245,6 +245,7 @@ actor DashScopeQwenAudioStreamingClient {
             }
             isConnected = false
             isTaskStarted = false
+            eventsContinuation.yield(.sessionFinished)
 
         case "task-failed":
             let message =

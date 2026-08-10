@@ -145,6 +145,8 @@ final class DashScopeStreamingProvider: StreamingTranscriptionProvider {
             eventsContinuation?.yield(.partial(text: text))
         case .committed(let text):
             eventsContinuation?.yield(.committed(text: text))
+        case .sessionFinished:
+            eventsContinuation?.yield(.sessionFinished)
         case .error(let message):
             eventsContinuation?.yield(.error(StreamingTranscriptionError.serverError(message)))
         }

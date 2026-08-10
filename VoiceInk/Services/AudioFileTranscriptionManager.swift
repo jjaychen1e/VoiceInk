@@ -171,11 +171,43 @@ class AudioTranscriptionManager: ObservableObject {
             // Phase: Transcribing
             item.status = .processing(phase: .transcribing)
             let transcriptionStart = Date()
-            var text = try await serviceRegistry.transcribe(
-                audioURL: permanentURL,
-                model: currentModel,
-                context: transcriptionConfiguration.requestContext
-            )
+            var text: String
+            var timedSentences: [TranscriptionTimedSentence]?
+            switch transcriptionConfiguration.fileStrategy {
+            case .stream:
+                text = try await FileStreamingTranscriber.transcribe(
+                    samples: samples,
+                    model: currentModel,
+                    context: transcriptionConfiguration.requestContext,
+                    modelContext: modelContext,
+                    fluidAudioService: serviceRegistry.fluidAudioTranscriptionService,
+                    batchFallback: {
+                        try await serviceRegistry.transcribe(
+                            audioURL: permanentURL,
+                            model: currentModel,
+                            context: transcriptionConfiguration.requestContext
+                        )
+                    }
+                )
+            case .asynchronous:
+                guard let apiKey = APIKeyManager.shared.getAPIKey(forProvider: "Alibaba"), !apiKey.isEmpty else {
+                    throw CloudTranscriptionError.missingAPIKey
+                }
+                let filetransResult = try await DashScopeFiletransClient.transcribe(
+                    audioURL: permanentURL,
+                    apiKey: apiKey,
+                    model: currentModel.name,
+                    language: transcriptionConfiguration.language
+                )
+                text = filetransResult.text
+                timedSentences = filetransResult.sentences.isEmpty ? nil : filetransResult.sentences
+            case .sync:
+                text = try await serviceRegistry.transcribe(
+                    audioURL: permanentURL,
+                    model: currentModel,
+                    context: transcriptionConfiguration.requestContext
+                )
+            }
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
             text = TranscriptionOutputFilter.filter(text)
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -211,10 +243,19 @@ class AudioTranscriptionManager: ObservableObject {
                 enhancementService.isConfigured(for: enhancementConfiguration)
             {
                 item.status = .processing(phase: .enhancing)
+                let storedTimeout = UserDefaults.standard.integer(forKey: "EnhancementTimeoutSeconds")
+                let baseTimeout = storedTimeout > 0 ? TimeInterval(storedTimeout) : 7
+                let enhancementTimeout = EnhancementTimeoutPolicy.forFileTranscription(
+                    text: cleanedText,
+                    baseTimeout: baseTimeout
+                )
                 do {
-                    let enhancementResult = try await enhancementService.enhance(
-                        text,
-                        configuration: enhancementConfiguration
+                    let enhancementResult = try await FileTranscriptionEnhancer.enhance(
+                        text: text,
+                        timedSentences: timedSentences,
+                        service: enhancementService,
+                        configuration: enhancementConfiguration,
+                        timeout: enhancementTimeout
                     )
                     transcription = Transcription(
                         text: cleanedText,
@@ -230,7 +271,9 @@ class AudioTranscriptionManager: ObservableObject {
                         aiRequestSystemMessage: enhancementResult.systemMessage,
                         aiRequestUserMessage: enhancementResult.userMessage,
                         modeName: modeMetadata.name,
-                        modeEmoji: modeMetadata.emoji
+                        modeEmoji: modeMetadata.emoji,
+                        timedSentences: timedSentences,
+                        enhancedTimedSentences: enhancementResult.timedSentences
                     )
                 } catch {
                     let failureMessage = EnhancementFailureFormatter.message(for: error)
@@ -243,7 +286,8 @@ class AudioTranscriptionManager: ObservableObject {
                         promptName: nil,
                         transcriptionDuration: transcriptionDuration,
                         modeName: modeMetadata.name,
-                        modeEmoji: modeMetadata.emoji
+                        modeEmoji: modeMetadata.emoji,
+                        timedSentences: timedSentences
                     )
                 }
             } else {
@@ -255,7 +299,8 @@ class AudioTranscriptionManager: ObservableObject {
                     promptName: nil,
                     transcriptionDuration: transcriptionDuration,
                     modeName: modeMetadata.name,
-                    modeEmoji: modeMetadata.emoji
+                    modeEmoji: modeMetadata.emoji,
+                    timedSentences: timedSentences
                 )
             }
 

@@ -6,6 +6,7 @@ struct TranscriptionListItem: View {
     let isChecked: Bool
     let onSelect: () -> Void
     let onToggleCheck: () -> Void
+    let onToggleFavorite: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -43,6 +44,14 @@ struct TranscriptionListItem: View {
                     .lineLimit(2)
                     .foregroundColor(.primary)
             }
+
+            Button(action: onToggleFavorite) {
+                Image(systemName: transcription.isFavorite ? "star.fill" : "star")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(transcription.isFavorite ? Color.yellow : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(transcription.isFavorite ? "Remove from Favorites" : "Add to Favorites")
         }
         .padding(10)
         .background {

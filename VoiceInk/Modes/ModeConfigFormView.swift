@@ -222,6 +222,8 @@ struct ModeConfigFormView: View {
                         let model = warmupSnapshot.transcriptionModel(named: modelName)
                     {
                         draft.isRealtimeTranscriptionEnabled = TranscriptionRealtimeSupport.isAvailable(for: model)
+                        draft.fileTranscriptionStrategy = TranscriptionFileSupport.resolved(
+                            draft.fileTranscriptionStrategy, for: model)
                         if model.provider == .gemini {
                             draft.selectedLanguage = "auto"
                         } else {
@@ -231,6 +233,7 @@ struct ModeConfigFormView: View {
                 }
 
                 realtimeToggle
+                fileTranscriptionStrategyPicker
             }
 
             languagePicker
@@ -264,6 +267,28 @@ struct ModeConfigFormView: View {
                 .onChange(of: draft.isRealtimeTranscriptionEnabled) { _, _ in
                     draft.useCompatibleLanguage(for: model)
                 }
+        }
+    }
+
+    /// File queue strategy: Sync / Async / Stream (options depend on model capabilities).
+    @ViewBuilder
+    private var fileTranscriptionStrategyPicker: some View {
+        if let model = selectedTranscriptionModel {
+            let strategies = TranscriptionFileSupport.availableStrategies(for: model)
+            if strategies.count > 1 {
+                Picker("Files", selection: $draft.fileTranscriptionStrategy) {
+                    ForEach(strategies, id: \.self) { strategy in
+                        Text(strategy.displayName).tag(strategy)
+                    }
+                }
+                .help(
+                    "Sync: whole-file batch. Async: temporary upload + file transcription. Stream: chunked realtime API."
+                )
+                .onAppear {
+                    draft.fileTranscriptionStrategy = TranscriptionFileSupport.resolved(
+                        draft.fileTranscriptionStrategy, for: model)
+                }
+            }
         }
     }
 

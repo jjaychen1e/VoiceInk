@@ -21,4 +21,10 @@ extension Notification.Name {
     static let sessionMetricsDidChange = Notification.Name("sessionMetricsDidChange")
     static let openFileForTranscription = Notification.Name("openFileForTranscription")
     static let audioDeviceSwitchRequired = Notification.Name("audioDeviceSwitchRequired")
+    /// Seek the visible history audio player. `userInfo["time"]` is a `TimeInterval`.
+    static let seekTranscriptionAudio = Notification.Name("seekTranscriptionAudio")
+    /// History playback clock. `userInfo["time"]` is `TimeInterval`, `userInfo["isPlaying"]` is `Bool`.
+    static let transcriptionPlaybackTimeDidChange = Notification.Name("transcriptionPlaybackTimeDidChange")
+    /// Pause the visible history audio player (e.g. when linked video takes over).
+    static let pauseTranscriptionAudio = Notification.Name("pauseTranscriptionAudio")
 }

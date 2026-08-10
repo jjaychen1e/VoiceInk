@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension TimeInterval {
     func formatTiming() -> String {
@@ -81,6 +82,43 @@ class AudioPlayerManager: ObservableObject {
         didSet { UserDefaults.standard.set(playbackRate, forKey: "audioPlaybackRate") }
     }
 
+    private var seekObserver: NSObjectProtocol?
+    private var pauseObserver: NSObjectProtocol?
+
+    init() {
+        seekObserver = NotificationCenter.default.addObserver(
+            forName: .seekTranscriptionAudio,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let time = notification.userInfo?["time"] as? TimeInterval else { return }
+            self?.seek(to: time)
+            if LinkedVideoWindowController.shared.isOpen {
+                self?.pause()
+            } else if self?.isPlaying == false {
+                self?.play()
+            }
+        }
+
+        pauseObserver = NotificationCenter.default.addObserver(
+            forName: .pauseTranscriptionAudio,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.pause()
+        }
+    }
+
+    deinit {
+        if let seekObserver {
+            NotificationCenter.default.removeObserver(seekObserver)
+        }
+        if let pauseObserver {
+            NotificationCenter.default.removeObserver(pauseObserver)
+        }
+        cleanup()
+    }
+
     func loadAudio(from url: URL) {
         do {
             audioPlayer = try AVAudioPlayer(contentsOf: url)
@@ -106,6 +144,7 @@ class AudioPlayerManager: ObservableObject {
         audioPlayer?.play()
         isPlaying = true
         startTimer()
+        publishPlaybackTime()
     }
 
     func cyclePlaybackRate() {
@@ -121,17 +160,20 @@ class AudioPlayerManager: ObservableObject {
         audioPlayer?.pause()
         isPlaying = false
         stopTimer()
+        publishPlaybackTime()
     }
 
     func seek(to time: TimeInterval) {
         audioPlayer?.currentTime = time
         currentTime = time
+        publishPlaybackTime()
     }
 
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             self.currentTime = self.audioPlayer?.currentTime ?? 0
+            self.publishPlaybackTime()
             if self.currentTime >= self.duration {
                 self.pause()
                 self.seek(to: 0)
@@ -144,14 +186,22 @@ class AudioPlayerManager: ObservableObject {
         timer = nil
     }
 
+    /// Broadcasts the playback clock so History timestamp rows can highlight.
+    private func publishPlaybackTime() {
+        NotificationCenter.default.post(
+            name: .transcriptionPlaybackTimeDidChange,
+            object: self,
+            userInfo: [
+                "time": currentTime,
+                "isPlaying": isPlaying,
+            ]
+        )
+    }
+
     func cleanup() {
         stopTimer()
         audioPlayer?.stop()
         audioPlayer = nil
-    }
-
-    deinit {
-        cleanup()
     }
 }
 
@@ -357,6 +407,7 @@ struct AudioPlayerView: View {
     @State private var operationFeedback: OperationFeedback?
     @State private var showModePopover = false
     @State private var showPromptPopover = false
+    @State private var showLinkedVideoPopover = false
     @EnvironmentObject private var engine: VoiceInkEngine
     @EnvironmentObject private var enhancementService: AIEnhancementService
     @ObservedObject private var modeManager = ModeManager.shared
@@ -405,6 +456,10 @@ struct AudioPlayerView: View {
                 HStack(spacing: 8) {
                     CircleIconButton(icon: "folder", action: showInFinder)
                         .help("Show in Finder")
+
+                    if transcription != nil {
+                        linkedVideoMenuButton
+                    }
 
                     Button(action: { playerManager.cyclePlaybackRate() }) {
                         Circle()
@@ -488,6 +543,115 @@ struct AudioPlayerView: View {
 
     private func showInFinder() {
         NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+    }
+
+    /// Film control: choose / open / clear a companion video for subtitle sync.
+    /// Uses a Button+popover (same chrome as other circle controls) instead of Menu,
+    /// which paints a mismatched system background on macOS.
+    private var linkedVideoMenuButton: some View {
+        Button {
+            showLinkedVideoPopover.toggle()
+        } label: {
+            Circle()
+                .fill(
+                    transcription?.resolvedLinkedVideoURL == nil
+                        ? AppTheme.Surface.subtle : AppTheme.Surface.controlActive
+                )
+                .frame(width: 32, height: 32)
+                .overlay(
+                    Image(systemName: "film")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(
+            transcription?.resolvedLinkedVideoURL == nil
+                ? "Link a video for subtitle sync"
+                : "Linked video options"
+        )
+        .popover(isPresented: $showLinkedVideoPopover, arrowEdge: .bottom) {
+            linkedVideoOptionsPopover
+        }
+    }
+
+    private var linkedVideoOptionsPopover: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button("Choose Video…") {
+                showLinkedVideoPopover = false
+                chooseLinkedVideo()
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+
+            if transcription?.resolvedLinkedVideoURL != nil {
+                Button("Open Video Window") {
+                    showLinkedVideoPopover = false
+                    openLinkedVideoWindow()
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+
+                Divider()
+
+                Button("Clear Linked Video", role: .destructive) {
+                    showLinkedVideoPopover = false
+                    clearLinkedVideo()
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+        }
+        .padding(.vertical, 6)
+        .frame(minWidth: 180, alignment: .leading)
+    }
+
+    /// Opens an NSOpenPanel and stores the selected video on the transcription.
+    private func chooseLinkedVideo() {
+        guard let transcription else { return }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.message = String(localized: "Choose a video to sync with this transcription’s timestamps")
+        guard panel.runModal() == .OK, let selected = panel.url else { return }
+
+        transcription.linkedVideoURL = selected.absoluteString
+        do {
+            try modelContext.save()
+        } catch {
+            print("Failed to save linked video: \(error.localizedDescription)")
+            return
+        }
+        openLinkedVideoWindow()
+    }
+
+    /// Opens the companion video window at the current audio playhead.
+    private func openLinkedVideoWindow() {
+        guard let transcription,
+            let videoURL = transcription.resolvedLinkedVideoURL
+        else { return }
+
+        let sentences = transcription.displayTimedSentences ?? []
+        let title = videoURL.deletingPathExtension().lastPathComponent
+        LinkedVideoWindowController.shared.show(
+            videoURL: videoURL,
+            sentences: sentences,
+            title: title,
+            startAt: playerManager.currentTime,
+            usesEnhancedText: transcription.enhancedTimedSentences != nil
+        )
+    }
+
+    /// Removes the linked companion video from the transcription.
+    private func clearLinkedVideo() {
+        guard let transcription else { return }
+        transcription.linkedVideoURL = nil
+        try? modelContext.save()
     }
 
     private var modeSelectorButton: some View {

@@ -12,6 +12,7 @@ struct ModeConfigDraft {
     var selectedPromptId: UUID?
     var selectedTranscriptionModelName: String?
     var isRealtimeTranscriptionEnabled: Bool
+    var fileTranscriptionStrategy: FileTranscriptionStrategy
     var selectedLanguage: String?
     var isTextFormattingEnabled: Bool
     var useClipboardContext: Bool
@@ -43,6 +44,7 @@ struct ModeConfigDraft {
             selectedPromptId = inheritedConfig?.selectedPrompt.flatMap { UUID(uuidString: $0) }
             selectedTranscriptionModelName = inheritedConfig?.selectedTranscriptionModelName
             isRealtimeTranscriptionEnabled = true
+            fileTranscriptionStrategy = .sync
             selectedLanguage = inheritedConfig?.selectedLanguage
             isTextFormattingEnabled = true
             useClipboardContext = false
@@ -70,6 +72,7 @@ struct ModeConfigDraft {
             selectedPromptId = latestConfig.selectedPrompt.flatMap { UUID(uuidString: $0) }
             selectedTranscriptionModelName = latestConfig.selectedTranscriptionModelName
             isRealtimeTranscriptionEnabled = latestConfig.isRealtimeTranscriptionEnabled
+            fileTranscriptionStrategy = latestConfig.fileTranscriptionStrategy
             selectedLanguage = latestConfig.selectedLanguage
             isTextFormattingEnabled = latestConfig.isTextFormattingEnabled
             useClipboardContext = latestConfig.useClipboardContext
@@ -181,6 +184,7 @@ struct ModeConfigDraft {
                 selectedPrompt: selectedPromptId?.uuidString,
                 selectedTranscriptionModelName: selectedTranscriptionModelName,
                 isRealtimeTranscriptionEnabled: isRealtimeTranscriptionEnabled,
+                fileTranscriptionStrategy: fileTranscriptionStrategy,
                 selectedLanguage: selectedLanguage,
                 useClipboardContext: useClipboardContext,
                 useSelectedTextContext: useSelectedTextContext,
@@ -206,6 +210,7 @@ struct ModeConfigDraft {
             updatedConfig.selectedPrompt = selectedPromptId?.uuidString
             updatedConfig.selectedTranscriptionModelName = selectedTranscriptionModelName
             updatedConfig.isRealtimeTranscriptionEnabled = isRealtimeTranscriptionEnabled
+            updatedConfig.fileTranscriptionStrategy = fileTranscriptionStrategy
             updatedConfig.selectedLanguage = selectedLanguage
             updatedConfig.isTextFormattingEnabled = isTextFormattingEnabled
             updatedConfig.useClipboardContext = useClipboardContext

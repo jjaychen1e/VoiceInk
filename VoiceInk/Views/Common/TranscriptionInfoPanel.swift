@@ -8,6 +8,7 @@ struct TranscriptionInfoPanel: View {
     var body: some View {
         Form {
             detailsSection
+            timestampsSection
             aiRequestSection
         }
         .formStyle(.grouped)
@@ -80,6 +81,29 @@ struct TranscriptionInfoPanel: View {
             }
         } header: {
             Text("Details")
+        }
+    }
+
+    // MARK: - Timestamps Section
+
+    @ViewBuilder
+    private var timestampsSection: some View {
+        let displaySentences = transcription.enhancedTimedSentences ?? transcription.timedSentences
+        let usesEnhanced = transcription.enhancedTimedSentences != nil
+        if let sentences = displaySentences, !sentences.isEmpty {
+            Section {
+                TimedSentencesListView(
+                    sentences: sentences,
+                    usesEnhancedText: usesEnhanced,
+                    showsCardChrome: false
+                )
+            } footer: {
+                Text(
+                    usesEnhanced
+                        ? "Enhanced text with original ASR time windows. Tap to seek audio."
+                        : "Raw ASR sentence timings. Tap to seek audio."
+                )
+            }
         }
     }
 
