@@ -7,14 +7,11 @@ enum LiveTranscribePanelSettingsKeys {
 }
 
 /// Floating non-activating caption panel for Live Transcribe.
-final class LiveTranscribePanel: NSPanel {
+final class LiveTranscribePanel: OverlayHUDPanel {
     static let resizeCornerSize: CGFloat = 28
     static let titleBarHeight: CGFloat = 34
     /// Bottom AppKit control strip (close + Translate). Right corner left for resize.
     static let bottomControlsHeight: CGFloat = 34
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
 
     init(contentRect: NSRect) {
         super.init(
@@ -27,10 +24,8 @@ final class LiveTranscribePanel: NSPanel {
     }
 
     private func configurePanel() {
-        isFloatingPanel = true
-        canHide = false
-        level = .floating
-        hidesOnDeactivate = false
+        OverlayPanelFocus.applyBasePolicy(to: self)
+        level = OverlayPanelFocus.hudWindowLevel
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isMovable = true
         isMovableByWindowBackground = false

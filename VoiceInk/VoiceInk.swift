@@ -10,19 +10,23 @@ struct VoiceInkApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     let container: ModelContainer
 
-    @StateObject private var engine: VoiceInkEngine
-    @StateObject private var whisperModelManager: WhisperModelManager
-    @StateObject private var fluidAudioModelManager: FluidAudioModelManager
-    @StateObject private var transcriptionModelManager: TranscriptionModelManager
-    @StateObject private var recorderUIManager: RecorderUIManager
-    @StateObject private var recordingShortcutManager: RecordingShortcutManager
-    @StateObject private var updaterViewModel: UpdaterViewModel
-    @StateObject private var menuBarManager: MenuBarManager
-    @StateObject private var mainWindowNavigation = MainWindowNavigation.shared
-    @StateObject private var aiService = AIService()
-    @StateObject private var enhancementService: AIEnhancementService
-    @StateObject private var licenseViewModel = LicenseViewModel.shared
-    @StateObject private var activeWindowService = ActiveWindowService.shared
+    /// Held as plain `let`s so `App.body` does not rebuild `MenuBarExtra` on
+    /// every engine / enhancement / window-focus publish (that rebuild is what
+    /// makes nested status-item menus flicker while a HUD is visible).
+    private let engine: VoiceInkEngine
+    private let whisperModelManager: WhisperModelManager
+    private let fluidAudioModelManager: FluidAudioModelManager
+    private let transcriptionModelManager: TranscriptionModelManager
+    private let recorderUIManager: RecorderUIManager
+    private let recordingShortcutManager: RecordingShortcutManager
+    private let updaterViewModel: UpdaterViewModel
+    private let menuBarManager: MenuBarManager
+    private let mainWindowNavigation: MainWindowNavigation
+    private let aiService: AIService
+    private let enhancementService: AIEnhancementService
+    private let licenseViewModel: LicenseViewModel
+    private let activeWindowService: ActiveWindowService
+    private let prewarmService: ModelPrewarmService
     @AppStorage("hasCompletedOnboardingV2") private var hasCompletedOnboardingV2 = false
     @AppStorage("enableAnnouncements") private var enableAnnouncements = true
     @State private var showMenuBarIcon = true
@@ -35,7 +39,7 @@ struct VoiceInkApp: App {
     private let transcriptionAutoCleanupService = TranscriptionAutoCleanupService.shared
 
     // Model prewarm service for optimizing model on wake from sleep
-    @StateObject private var prewarmService: ModelPrewarmService
+    // (retained via `prewarmService` above)
 
     init() {
         // Disable HTTP response caching — prevents API responses from being stored in Cache.db
@@ -93,14 +97,14 @@ struct VoiceInkApp: App {
 
         // Initialize services with proper sharing of instances
         let aiService = AIService()
-        _aiService = StateObject(wrappedValue: aiService)
+        self.aiService = aiService
         aiService.refreshOllamaAvailabilityInBackground()
 
         let updaterViewModel = UpdaterViewModel()
-        _updaterViewModel = StateObject(wrappedValue: updaterViewModel)
+        self.updaterViewModel = updaterViewModel
 
         let enhancementService = AIEnhancementService(aiService: aiService, modelContext: resolvedContainer.mainContext)
-        _enhancementService = StateObject(wrappedValue: enhancementService)
+        self.enhancementService = enhancementService
 
         // 1. Create modelsDirectory URL
         let appSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -138,29 +142,30 @@ struct VoiceInkApp: App {
         transcriptionModelManager.refreshAllAvailableModels()
         transcriptionModelManager.loadCurrentTranscriptionModel()
 
-        _whisperModelManager = StateObject(wrappedValue: whisperModelManager)
-        _fluidAudioModelManager = StateObject(wrappedValue: fluidAudioModelManager)
-        _transcriptionModelManager = StateObject(wrappedValue: transcriptionModelManager)
-        _recorderUIManager = StateObject(wrappedValue: recorderUIManager)
-        _engine = StateObject(wrappedValue: engine)
+        self.whisperModelManager = whisperModelManager
+        self.fluidAudioModelManager = fluidAudioModelManager
+        self.transcriptionModelManager = transcriptionModelManager
+        self.recorderUIManager = recorderUIManager
+        self.engine = engine
 
         // 7. Create other services that depend on engine
         let recordingShortcutManager = RecordingShortcutManager(engine: engine, recorderUIManager: recorderUIManager)
-        _recordingShortcutManager = StateObject(wrappedValue: recordingShortcutManager)
+        self.recordingShortcutManager = recordingShortcutManager
 
         let menuBarManager = MenuBarManager()
-        _menuBarManager = StateObject(wrappedValue: menuBarManager)
+        self.menuBarManager = menuBarManager
         menuBarManager.configure(modelContainer: resolvedContainer, engine: engine)
 
-        let activeWindowService = ActiveWindowService.shared
-        _activeWindowService = StateObject(wrappedValue: activeWindowService)
+        self.activeWindowService = ActiveWindowService.shared
+        self.licenseViewModel = LicenseViewModel.shared
+        self.mainWindowNavigation = MainWindowNavigation.shared
 
         let prewarmService = ModelPrewarmService(
             transcriptionModelManager: transcriptionModelManager,
             whisperModelManager: whisperModelManager,
             modelContext: resolvedContainer.mainContext
         )
-        _prewarmService = StateObject(wrappedValue: prewarmService)
+        self.prewarmService = prewarmService
 
         appDelegate.menuBarManager = menuBarManager
 

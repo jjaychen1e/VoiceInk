@@ -1,10 +1,7 @@
 import AppKit
 import SwiftUI
 
-class MiniRecorderPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-
+class MiniRecorderPanel: OverlayHUDPanel {
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
@@ -16,10 +13,8 @@ class MiniRecorderPanel: NSPanel {
     }
 
     private func configurePanel() {
-        isFloatingPanel = true
-        canHide = false
-        level = .floating
-        hidesOnDeactivate = false
+        OverlayPanelFocus.applyBasePolicy(to: self)
+        level = OverlayPanelFocus.hudWindowLevel
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isMovable = true
         isMovableByWindowBackground = true

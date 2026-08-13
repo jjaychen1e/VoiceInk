@@ -1,15 +1,7 @@
 import AppKit
 import SwiftUI
 
-class KeyablePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-}
-
-class NotchRecorderPanel: KeyablePanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-
+class NotchRecorderPanel: OverlayHUDPanel {
     init(contentRect: NSRect) {
         let metrics = NotchRecorderPanel.calculateWindowMetrics()
 
@@ -20,15 +12,13 @@ class NotchRecorderPanel: KeyablePanel {
             defer: false
         )
 
-        self.isFloatingPanel = true
-        self.canHide = false
+        OverlayPanelFocus.applyBasePolicy(to: self)
         self.level = .statusBar + 3
         self.backgroundColor = .clear
         self.isOpaque = false
         self.alphaValue = 1.0
         self.hasShadow = false
         self.isMovableByWindowBackground = false
-        self.hidesOnDeactivate = false
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         self.appearance = NSAppearance(named: .darkAqua)
         self.styleMask.remove(.titled)

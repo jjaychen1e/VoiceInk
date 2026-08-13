@@ -1,21 +1,18 @@
-import CoreAudio
 import SwiftUI
 
 struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
-    @EnvironmentObject var engine: VoiceInkEngine
     @EnvironmentObject var recorderUIManager: RecorderUIManager
     @EnvironmentObject var transcriptionModelManager: TranscriptionModelManager
-    @EnvironmentObject var whisperModelManager: WhisperModelManager
-    @EnvironmentObject var recordingShortcutManager: RecordingShortcutManager
     @EnvironmentObject var menuBarManager: MenuBarManager
     @EnvironmentObject var mainWindowNavigation: MainWindowNavigation
     @EnvironmentObject var updaterViewModel: UpdaterViewModel
     @EnvironmentObject var enhancementService: AIEnhancementService
-    @EnvironmentObject var aiService: AIService
     @ObservedObject private var launchAtLoginManager = LaunchAtLoginManager.shared
     @ObservedObject private var modeManager = ModeManager.shared
-    @ObservedObject private var liveTranscribeController = LiveTranscribeController.shared
+    /// Menu-only Live Transcribe state. The full controller is not observed here
+    /// because caption text would rebuild the status-item `NSMenu` on every token.
+    @StateObject private var liveTranslateChrome = LiveTranscribeMenuChrome()
     @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @AppStorage("hasCompletedOnboardingV2") private var hasCompletedOnboardingV2 = false
 
@@ -43,7 +40,7 @@ struct MenuBarView: View {
     ]
 
     var body: some View {
-        VStack {
+        Group {
             if hasCompletedOnboardingV2 {
                 completedOnboardingMenu
             } else {
@@ -125,7 +122,9 @@ struct MenuBarView: View {
                     Button {
                         audioDeviceManager.selectDeviceAndSwitchToCustomMode(id: device.id)
                     } label: {
-                        let isActive = isPinnedAudioInputDevice(device.id)
+                        let isActive =
+                            audioDeviceManager.inputMode != .systemDefault
+                            && audioDeviceManager.getCurrentDevice() == device.id
                         Text(isActive ? "\(device.name)  ✓" : device.name)
                     }
                 }
@@ -149,16 +148,14 @@ struct MenuBarView: View {
             Divider()
 
             Button("Retry Last Transcription") {
-                LastTranscriptionService.retryLastTranscription(
-                    from: engine.modelContext,
+                menuBarManager.retryLastTranscription(
                     transcriptionModelManager: transcriptionModelManager,
-                    serviceRegistry: engine.serviceRegistry,
                     enhancementService: enhancementService
                 )
             }
 
             Button("Copy Last Transcription") {
-                LastTranscriptionService.copyLastTranscription(from: engine.modelContext)
+                menuBarManager.copyLastTranscription()
             }
             .keyboardShortcut("c", modifiers: [.command, .shift])
 
@@ -206,22 +203,25 @@ struct MenuBarView: View {
 
     /// Menu Bar entry for Live Translate with nested Translate / language menus.
     private var liveTranslateMenu: some View {
-        Menu {
+        let live = liveTranslateChrome.snapshot
+        return Menu {
             Button {
                 Task {
-                    await liveTranscribeController.toggle(modelContext: engine.modelContext)
+                    await LiveTranscribeController.shared.toggle(
+                        modelContext: menuBarManager.liveTranscribeModelContext()
+                    )
                 }
             } label: {
-                Text(liveTranscribeController.isRunning ? "Stop" : "Start")
+                Text(live.isRunning ? "Stop" : "Start")
             }
             .disabled(
-                liveTranscribeController.isSwitchingPipeline
-                    || (!liveTranscribeController.isRunning && !liveTranscribeController.hasAlibabaAPIKey)
+                live.isSwitchingPipeline
+                    || (!live.isRunning && !live.hasAlibabaAPIKey)
             )
 
-            if liveTranscribeController.isRunning {
+            if live.isRunning {
                 Button("Show Caption Window") {
-                    liveTranscribeController.bringCaptionWindowToFront()
+                    LiveTranscribeController.shared.bringCaptionWindowToFront()
                 }
             }
 
@@ -229,21 +229,21 @@ struct MenuBarView: View {
 
             Menu {
                 Button {
-                    Task { await liveTranscribeController.applyTranslationEnabled(true) }
+                    Task { await LiveTranscribeController.shared.applyTranslationEnabled(true) }
                 } label: {
-                    Text(liveTranscribeController.isTranslationEnabled ? "On  ✓" : "On")
+                    Text(live.isTranslationEnabled ? "On  ✓" : "On")
                 }
-                .disabled(liveTranscribeController.isSwitchingPipeline)
+                .disabled(live.isSwitchingPipeline)
 
                 Button {
-                    Task { await liveTranscribeController.applyTranslationEnabled(false) }
+                    Task { await LiveTranscribeController.shared.applyTranslationEnabled(false) }
                 } label: {
-                    Text(liveTranscribeController.isTranslationEnabled ? "Off" : "Off  ✓")
+                    Text(live.isTranslationEnabled ? "Off" : "Off  ✓")
                 }
-                .disabled(liveTranscribeController.isSwitchingPipeline)
+                .disabled(live.isSwitchingPipeline)
             } label: {
                 Text(
-                    liveTranscribeController.isTranslationEnabled
+                    live.isTranslationEnabled
                         ? "Translate: On"
                         : "Translate: Off"
                 )
@@ -252,36 +252,36 @@ struct MenuBarView: View {
             Menu {
                 ForEach(liveTranslateSourceLanguages, id: \.code) { language in
                     Button {
-                        liveTranscribeController.sourceLanguage = language.code
+                        LiveTranscribeController.shared.sourceLanguage = language.code
                     } label: {
                         Text(
-                            liveTranscribeController.sourceLanguage == language.code
+                            live.sourceLanguage == language.code
                                 ? "\(language.label)  ✓"
                                 : language.label
                         )
                     }
                 }
             } label: {
-                Text("Source: \(languageLabel(for: liveTranscribeController.sourceLanguage, in: liveTranslateSourceLanguages))")
+                Text("Source: \(languageLabel(for: live.sourceLanguage, in: liveTranslateSourceLanguages))")
             }
-            .disabled(liveTranscribeController.isRunning)
+            .disabled(live.isRunning)
 
             Menu {
                 ForEach(liveTranslateTargetLanguages, id: \.code) { language in
                     Button {
-                        liveTranscribeController.targetLanguage = language.code
+                        LiveTranscribeController.shared.targetLanguage = language.code
                     } label: {
                         Text(
-                            liveTranscribeController.targetLanguage == language.code
+                            live.targetLanguage == language.code
                                 ? "\(language.label)  ✓"
                                 : language.label
                         )
                     }
                 }
             } label: {
-                Text("Target: \(languageLabel(for: liveTranscribeController.targetLanguage, in: liveTranslateTargetLanguages))")
+                Text("Target: \(languageLabel(for: live.targetLanguage, in: liveTranslateTargetLanguages))")
             }
-            .disabled(liveTranscribeController.isRunning || !liveTranscribeController.isTranslationEnabled)
+            .disabled(live.isRunning || !live.isTranslationEnabled)
 
             Divider()
 
@@ -300,8 +300,9 @@ struct MenuBarView: View {
     }
 
     private var liveTranslateMenuTitle: String {
-        if liveTranscribeController.isRunning {
-            return liveTranscribeController.isTranslationEnabled
+        let live = liveTranslateChrome.snapshot
+        if live.isRunning {
+            return live.isTranslationEnabled
                 ? String(localized: "Live Translate: On")
                 : String(localized: "Live Translate: Captions")
         }
@@ -314,12 +315,6 @@ struct MenuBarView: View {
             return String(localized: "System Default")
         }
         return String(format: String(localized: "System Default (%@)"), name)
-    }
-
-    /// Whether this device is the pinned custom/priority input, not merely the live system default.
-    private func isPinnedAudioInputDevice(_ deviceID: AudioDeviceID) -> Bool {
-        audioDeviceManager.inputMode != .systemDefault
-            && audioDeviceManager.getCurrentDevice() == deviceID
     }
 
     /// Resolves a language code to its menu label.

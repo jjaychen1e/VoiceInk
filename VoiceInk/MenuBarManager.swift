@@ -83,6 +83,31 @@ class MenuBarManager: ObservableObject {
         }
     }
 
+    /// Copies the latest transcription without the menu observing `VoiceInkEngine`.
+    func copyLastTranscription() {
+        guard let engine else { return }
+        LastTranscriptionService.copyLastTranscription(from: engine.modelContext)
+    }
+
+    /// Retries the latest transcription without the menu observing `VoiceInkEngine`.
+    func retryLastTranscription(
+        transcriptionModelManager: TranscriptionModelManager,
+        enhancementService: AIEnhancementService
+    ) {
+        guard let engine else { return }
+        LastTranscriptionService.retryLastTranscription(
+            from: engine.modelContext,
+            transcriptionModelManager: transcriptionModelManager,
+            serviceRegistry: engine.serviceRegistry,
+            enhancementService: enhancementService
+        )
+    }
+
+    /// SwiftData context for Live Transcribe start/stop from the menu bar.
+    func liveTranscribeModelContext() -> ModelContext? {
+        engine?.modelContext
+    }
+
     func openHistoryWindow() {
         guard let modelContainer = modelContainer,
             let engine = engine

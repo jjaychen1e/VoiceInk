@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     weak var menuBarManager: MenuBarManager?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        OverlayPanelFocus.installIfNeeded()
         menuBarManager?.applyActivationPolicy()
     }
 
