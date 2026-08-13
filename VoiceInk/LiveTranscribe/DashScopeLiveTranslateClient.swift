@@ -1,28 +1,32 @@
 import Foundation
 
-/// Events emitted by the DashScope realtime WebSocket client.
-enum DashScopeStreamingClientEvent: Sendable {
+/// Events emitted by the DashScope LiveTranslate realtime WebSocket client.
+enum DashScopeLiveTranslateClientEvent: Sendable {
     case sessionStarted
-    case partial(text: String)
-    case committed(text: String)
+    case sourcePartial(text: String)
+    case sourceCommitted(text: String)
+    case translationPartial(text: String)
+    case translationCommitted(text: String)
     case sessionFinished
     case error(String)
 }
 
-/// WebSocket client for `qwen3-asr-flash-realtime` (OpenAI Realtime-style protocol).
-actor DashScopeStreamingClient {
+/// WebSocket client for `qwen3.5-livetranslate-flash-realtime` (text-only captions).
+actor DashScopeLiveTranslateClient {
+    static let modelName = "qwen3.5-livetranslate-flash-realtime"
+
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
     private var receiveTask: Task<Void, Never>?
-    private let eventsContinuation: AsyncStream<DashScopeStreamingClientEvent>.Continuation
+    private let eventsContinuation: AsyncStream<DashScopeLiveTranslateClientEvent>.Continuation
     private var isConnected = false
     private var eventCounter = 0
 
-    let transcriptionEvents: AsyncStream<DashScopeStreamingClientEvent>
+    let events: AsyncStream<DashScopeLiveTranslateClientEvent>
 
     init() {
-        var continuation: AsyncStream<DashScopeStreamingClientEvent>.Continuation!
-        transcriptionEvents = AsyncStream { continuation = $0 }
+        var continuation: AsyncStream<DashScopeLiveTranslateClientEvent>.Continuation!
+        events = AsyncStream { continuation = $0 }
         eventsContinuation = continuation
     }
 
@@ -33,29 +37,27 @@ actor DashScopeStreamingClient {
         eventsContinuation.finish()
     }
 
-    /// Opens a realtime session and configures turn detection.
+    /// Opens a LiveTranslate session with text-only output and optional source transcription.
     ///
-    /// - Parameter corpusText: Optional contextual biasing text for
-    ///   `input_audio_transcription.corpus.text` (Qwen-ASR Realtime). Pass `nil`/empty to omit.
-    /// - Parameter serverVad: When `true`, the server detects utterance boundaries (continuous
-    ///   Live Transcribe). When `false`, Manual mode is used and the client must call `commit()`.
+    /// - Parameter corpusText: Biasing text for source ASR (`input_audio_transcription.corpus.text`).
+    /// - Parameter translationPhrases: Source→target hotword map for `translation.corpus.phrases`.
     func connect(
         apiKey: String,
-        model: String,
-        language: String?,
+        sourceLanguage: String,
+        targetLanguage: String,
         region: DashScopeRegion = .current,
-        serverVad: Bool = false,
-        corpusText: String? = nil
+        corpusText: String? = nil,
+        translationPhrases: [String: String] = [:]
     ) async throws {
         await closeSocket()
 
         guard var components = URLComponents(url: region.realtimeWebSocketBaseURL, resolvingAgainstBaseURL: false)
         else {
-            throw StreamingTranscriptionError.connectionFailed("Invalid Alibaba realtime URL")
+            throw StreamingTranscriptionError.connectionFailed("Invalid Alibaba LiveTranslate URL")
         }
-        components.queryItems = [URLQueryItem(name: "model", value: model)]
+        components.queryItems = [URLQueryItem(name: "model", value: Self.modelName)]
         guard let url = components.url else {
-            throw StreamingTranscriptionError.connectionFailed("Invalid Alibaba realtime URL")
+            throw StreamingTranscriptionError.connectionFailed("Invalid Alibaba LiveTranslate URL")
         }
 
         var request = URLRequest(url: url)
@@ -71,44 +73,39 @@ actor DashScopeStreamingClient {
         isConnected = true
         startReceiveLoop()
 
-        var transcriptionConfig: [String: Any] = [:]
-        if let language, !language.isEmpty, language != "auto" {
-            transcriptionConfig["language"] = language
+        var transcriptionConfig: [String: Any] = [
+            "model": "qwen3-asr-flash-realtime",
+        ]
+        if !sourceLanguage.isEmpty, sourceLanguage != "auto" {
+            transcriptionConfig["language"] = sourceLanguage
         }
         let trimmedCorpus = corpusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedCorpus.isEmpty {
             transcriptionConfig["corpus"] = ["text": trimmedCorpus]
         }
 
-        var sessionConfig: [String: Any] = [
+        var translationConfig: [String: Any] = [
+            "language": targetLanguage,
+        ]
+        if !translationPhrases.isEmpty {
+            translationConfig["corpus"] = [
+                "phrases": translationPhrases,
+            ]
+        }
+
+        let sessionConfig: [String: Any] = [
             "modalities": ["text"],
             "input_audio_format": "pcm",
             "sample_rate": 16000,
+            "input_audio_transcription": transcriptionConfig,
+            "translation": translationConfig,
         ]
-        if !transcriptionConfig.isEmpty {
-            sessionConfig["input_audio_transcription"] = transcriptionConfig
-        }
 
-        if serverVad {
-            sessionConfig["turn_detection"] = [
-                "type": "server_vad",
-                "threshold": 0.0,
-                "silence_duration_ms": 400,
-            ]
-            // Live Transcribe / continuous VAD: match Qwen-ASR docs (no Omni modalities).
-            sessionConfig.removeValue(forKey: "modalities")
-        } else {
-            // Manual mode: VoiceInk controls utterance boundaries via commit() on stop.
-            sessionConfig["turn_detection"] = NSNull()
-        }
-
-        let payload: [String: Any] = [
+        try await sendJSON([
             "event_id": nextEventID(),
             "type": "session.update",
             "session": sessionConfig,
-        ]
-
-        try await sendJSON(payload)
+        ])
         eventsContinuation.yield(.sessionStarted)
     }
 
@@ -124,22 +121,7 @@ actor DashScopeStreamingClient {
         ])
     }
 
-    /// Commits the buffered audio and asks the server to finish the session.
-    func commit() async throws {
-        guard isConnected, webSocketTask != nil else {
-            throw StreamingTranscriptionError.notConnected
-        }
-        try await sendJSON([
-            "event_id": nextEventID(),
-            "type": "input_audio_buffer.commit",
-        ])
-        try await sendJSON([
-            "event_id": nextEventID(),
-            "type": "session.finish",
-        ])
-    }
-
-    /// Asks the server to finish a server-VAD session without a manual commit.
+    /// Asks the server to finish the session cleanly before disconnecting.
     func finish() async throws {
         guard isConnected, webSocketTask != nil else {
             throw StreamingTranscriptionError.notConnected
@@ -223,20 +205,44 @@ actor DashScopeStreamingClient {
         switch type {
         case "conversation.item.input_audio_transcription.text",
             "conversation.item.input_audio_transcription.delta":
-            if let transcript = extractTranscript(from: json), !transcript.isEmpty {
-                eventsContinuation.yield(.partial(text: transcript))
+            // Qwen-ASR: `text` is finalized prefix, `stash` is revisable draft. Always show text+stash.
+            if let partial = Self.combinedPartialTranscript(from: json), !partial.isEmpty {
+                eventsContinuation.yield(.sourcePartial(text: partial))
             }
 
         case "conversation.item.input_audio_transcription.completed":
-            if let transcript = extractTranscript(from: json), !transcript.isEmpty {
-                eventsContinuation.yield(.committed(text: transcript))
+            if let transcript = (json["transcript"] as? String) ?? (json["text"] as? String),
+                !transcript.isEmpty
+            {
+                eventsContinuation.yield(.sourceCommitted(text: transcript))
+            }
+
+        case "response.text.text":
+            // Confirmed text + optional tentative stash for text-only LiveTranslate.
+            if let partial = Self.combinedPartialTranscript(from: json), !partial.isEmpty {
+                eventsContinuation.yield(.translationPartial(text: partial))
+            }
+
+        case "response.text.done":
+            if let text = json["text"] as? String, !text.isEmpty {
+                eventsContinuation.yield(.translationCommitted(text: text))
+            }
+
+        case "response.audio_transcript.text":
+            if let partial = Self.combinedPartialTranscript(from: json), !partial.isEmpty {
+                eventsContinuation.yield(.translationPartial(text: partial))
+            }
+
+        case "response.audio_transcript.done":
+            if let text = (json["transcript"] as? String) ?? (json["text"] as? String), !text.isEmpty {
+                eventsContinuation.yield(.translationCommitted(text: text))
             }
 
         case "error":
             let message =
                 (json["error"] as? [String: Any])?["message"] as? String
                 ?? json["message"] as? String
-                ?? "Alibaba realtime error"
+                ?? "Alibaba LiveTranslate error"
             eventsContinuation.yield(.error(message))
 
         case "session.finished":
@@ -248,21 +254,16 @@ actor DashScopeStreamingClient {
         }
     }
 
-    private func extractTranscript(from json: [String: Any]) -> String? {
-        // Prefer text+stash snapshot used by streaming `.text` events.
-        let hasTextKey = json["text"] != nil
-        let hasStashKey = json["stash"] != nil
-        if hasTextKey || hasStashKey {
-            let confirmed = json["text"] as? String ?? ""
-            let stash = json["stash"] as? String ?? ""
-            let combined = confirmed + stash
-            if !combined.isEmpty {
-                return combined
-            }
-        }
-
-        if let transcript = json["transcript"] as? String, !transcript.isEmpty {
-            return transcript
+    /// Builds the live preview string from confirmed `text`/`transcript` plus revisable `stash`.
+    private static func combinedPartialTranscript(from json: [String: Any]) -> String? {
+        let confirmed =
+            (json["text"] as? String)
+            ?? (json["transcript"] as? String)
+            ?? ""
+        let stash = json["stash"] as? String ?? ""
+        let combined = confirmed + stash
+        if !combined.isEmpty {
+            return combined
         }
         if let delta = json["delta"] as? String, !delta.isEmpty {
             return delta

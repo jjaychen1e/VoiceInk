@@ -148,12 +148,20 @@ enum AIProvider: String, CaseIterable {
             ]
         case .alibaba:
             return [
+                // Stable aliases (track latest in each tier).
                 "qwen-flash",
                 "qwen-plus",
                 "qwen-max",
-                "qwen3.7-flash",
-                "qwen3.7-plus",
+                "qwen-turbo",
+                // Version-pinned commercial text models (newest first).
                 "qwen3.8-max",
+                "qwen3.7-max",
+                "qwen3.7-plus",
+                "qwen3.7-flash",
+                "qwen3.6-plus",
+                "qwen3.6-flash",
+                "qwen3.5-plus",
+                "qwen3.5-flash",
             ]
         case .elevenLabs:
             return ["scribe_v2"]

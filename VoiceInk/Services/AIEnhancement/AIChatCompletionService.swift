@@ -8,13 +8,13 @@ extension AIService {
         messages: [ChatMessage],
         systemPrompt: String? = nil,
         timeout: TimeInterval = 30
-    ) async throws -> String {
+    ) async throws -> LLMChatCompletion {
         let resolvedModel = modelName?.isEmpty == false ? modelName! : selectedModel(for: provider)
 
-        let result: String
+        let completion: LLMChatCompletion
         switch provider {
         case .gemini:
-            result = try await GeminiLLMClient.chatCompletion(
+            let result = try await GeminiLLMClient.chatCompletion(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
                 model: resolvedModel,
                 messages: messages,
@@ -23,8 +23,9 @@ extension AIService {
                 store: false,
                 timeout: timeout
             )
+            completion = LLMChatCompletion(text: result, usage: nil)
         case .anthropic:
-            result = try await AnthropicLLMClient.chatCompletion(
+            completion = try await AnthropicUsageChatClient.chatCompletion(
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
                 model: resolvedModel,
                 messages: messages,
@@ -38,7 +39,7 @@ extension AIService {
             else {
                 throw EnhancementError.notConfigured
             }
-            result = try await OptionalTemperatureOpenAIClient.chatCompletion(
+            completion = try await OptionalTemperatureOpenAIClient.chatCompletion(
                 baseURL: baseURL,
                 apiKey: customConfiguration.apiKey,
                 model: customConfiguration.modelName,
@@ -53,17 +54,19 @@ extension AIService {
                 String(localized: "VoiceInk Refine only supports transcript cleanup.")
             )
         case .ollama:
-            result = try await enhanceWithOllama(
+            let result = try await enhanceWithOllama(
                 text: chatPrompt(from: messages),
                 systemPrompt: systemPrompt ?? "",
                 model: resolvedModel,
                 timeout: timeout
             )
+            completion = LLMChatCompletion(text: result, usage: nil)
         case .localCLI:
-            result = try await enhanceWithLocalCLI(
+            let result = try await enhanceWithLocalCLI(
                 systemPrompt: systemPrompt ?? "",
                 userPrompt: chatPrompt(from: messages)
             )
+            completion = LLMChatCompletion(text: result, usage: nil)
         default:
             guard let baseURL = URL(string: provider.baseURL) else {
                 throw EnhancementError.notConfigured
@@ -77,7 +80,7 @@ extension AIService {
                 for: provider,
                 modelName: resolvedModel
             )
-            result = try await OpenAILLMClient.chatCompletion(
+            completion = try await OptionalTemperatureOpenAIClient.chatCompletion(
                 baseURL: baseURL,
                 apiKey: try chatAPIKey(for: provider, modelName: resolvedModel),
                 model: resolvedModel,
@@ -86,11 +89,16 @@ extension AIService {
                 temperature: temperature,
                 reasoningEffort: reasoningEffort,
                 extraBody: extraBody,
+                enableSystemPromptCache: provider == .alibaba
+                    && AlibabaPromptCacheMode.current.usesExplicitCacheControl,
                 timeout: timeout
             )
         }
 
-        return AIEnhancementOutputFilter.filter(result)
+        return LLMChatCompletion(
+            text: AIEnhancementOutputFilter.filter(completion.text),
+            usage: completion.usage
+        )
     }
 
     private func chatAPIKey(for provider: AIProvider, modelName: String) throws -> String {

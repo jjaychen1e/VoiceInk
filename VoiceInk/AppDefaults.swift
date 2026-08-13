@@ -12,6 +12,12 @@ enum RecorderDisplaySettingsKeys {
     static let showLiveTranscript = "ShowLiveTranscript"
 }
 
+enum LiveTranscribeDefaults {
+    static let isTranslationEnabled = false
+    static let sourceLanguage = "en"
+    static let targetLanguage = "zh"
+}
+
 enum AppDefaults {
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -41,6 +47,11 @@ enum AppDefaults {
             "AppendTrailingSpace": true,
             "RecorderType": "mini",
             RecorderDisplaySettingsKeys.showLiveTranscript: true,
+
+            // Live Transcribe
+            LiveTranscribeSettingsKeys.isTranslationEnabled: LiveTranscribeDefaults.isTranslationEnabled,
+            LiveTranscribeSettingsKeys.sourceLanguage: LiveTranscribeDefaults.sourceLanguage,
+            LiveTranscribeSettingsKeys.targetLanguage: LiveTranscribeDefaults.targetLanguage,
 
             // Cleanup
             CleanupSettingsKeys.isTranscriptionCleanupEnabled: false,

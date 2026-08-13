@@ -9,6 +9,10 @@ import LLMkit
 /// on gateways that reject unknown fields.
 enum OptionalTemperatureOpenAIClient {
     /// Sends a chat completion, including optional fields only when non-nil.
+    ///
+    /// - Parameter enableSystemPromptCache: When true, the system prompt is sent as a
+    ///   structured text block with DashScope/Anthropic-style
+    ///   `cache_control: { type: ephemeral }` for explicit context cache.
     static func chatCompletion(
         baseURL: URL,
         apiKey: String,
@@ -18,8 +22,9 @@ enum OptionalTemperatureOpenAIClient {
         temperature: Double? = nil,
         reasoningEffort: String? = nil,
         extraBody: [String: Any]? = nil,
+        enableSystemPromptCache: Bool = false,
         timeout: TimeInterval = 30
-    ) async throws -> String {
+    ) async throws -> LLMChatCompletion {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
             throw LLMKitError.missingAPIKey
@@ -31,14 +36,13 @@ enum OptionalTemperatureOpenAIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
 
-        var allMessages = messages
-        if let systemPrompt, !systemPrompt.isEmpty {
-            allMessages.insert(.system(systemPrompt), at: 0)
-        }
-
         var bodyDict: [String: Any] = [
             "model": model,
-            "messages": allMessages.map { ["role": $0.role, "content": $0.content] },
+            "messages": encodeMessages(
+                messages: messages,
+                systemPrompt: systemPrompt,
+                enableSystemPromptCache: enableSystemPromptCache
+            ),
             "stream": false,
         ]
         if let temperature {
@@ -87,7 +91,50 @@ enum OptionalTemperatureOpenAIClient {
         guard let content = decoded.choices.first?.message.content else {
             throw LLMKitError.noResultReturned
         }
-        return content
+
+        let usageJSON = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["usage"]
+            as? [String: Any]
+        return LLMChatCompletion(
+            text: content,
+            usage: LLMUsage.fromOpenAICompatibleUsage(usageJSON)
+        )
+    }
+
+    /// Builds the OpenAI-compatible `messages` payload, optionally marking the system prompt for explicit cache.
+    private static func encodeMessages(
+        messages: [ChatMessage],
+        systemPrompt: String?,
+        enableSystemPromptCache: Bool
+    ) -> [[String: Any]] {
+        var encoded: [[String: Any]] = []
+
+        if let systemPrompt, !systemPrompt.isEmpty {
+            if enableSystemPromptCache {
+                let textBlock: [String: Any] = [
+                    "type": "text",
+                    "text": systemPrompt,
+                    "cache_control": ["type": "ephemeral"],
+                ]
+                encoded.append([
+                    "role": "system",
+                    "content": [textBlock],
+                ])
+            } else {
+                encoded.append([
+                    "role": "system",
+                    "content": systemPrompt,
+                ])
+            }
+        }
+
+        for message in messages where message.role != "system" {
+            encoded.append([
+                "role": message.role,
+                "content": message.content,
+            ])
+        }
+
+        return encoded
     }
 }
 

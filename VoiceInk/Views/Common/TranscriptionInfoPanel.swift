@@ -9,6 +9,7 @@ struct TranscriptionInfoPanel: View {
         Form {
             detailsSection
             timestampsSection
+            aiUsageSection
             aiRequestSection
         }
         .formStyle(.grouped)
@@ -107,6 +108,65 @@ struct TranscriptionInfoPanel: View {
         }
     }
 
+    // MARK: - AI Usage Section
+
+    @ViewBuilder
+    private var aiUsageSection: some View {
+        if hasProviderReportedUsage {
+            Section {
+                metadataRow(
+                    icon: "cylinder.split.1x2",
+                    label: "Cache Hit",
+                    value: cacheHitDisplayValue
+                )
+
+                if let cached = transcription.aiCachedPromptTokens {
+                    metadataRow(
+                        icon: "internaldrive",
+                        label: "Cached Tokens",
+                        value: cached.formatted()
+                    )
+                }
+
+                if let created = transcription.aiCacheCreationTokens, created > 0 {
+                    metadataRow(
+                        icon: "externaldrive.badge.plus",
+                        label: "Cache Write Tokens",
+                        value: created.formatted()
+                    )
+                }
+
+                if let prompt = transcription.aiPromptTokens {
+                    metadataRow(
+                        icon: "arrow.up.circle",
+                        label: "Prompt Tokens",
+                        value: prompt.formatted()
+                    )
+                }
+
+                if let completion = transcription.aiCompletionTokens {
+                    metadataRow(
+                        icon: "arrow.down.circle",
+                        label: "Completion Tokens",
+                        value: completion.formatted()
+                    )
+                }
+
+                if let total = transcription.aiTotalTokens {
+                    metadataRow(
+                        icon: "number",
+                        label: "Total Tokens",
+                        value: total.formatted()
+                    )
+                }
+            } header: {
+                Text("AI Usage")
+            } footer: {
+                Text("Token counts are reported by the provider for this request.")
+            }
+        }
+    }
+
     // MARK: - AI Request Section
 
     @ViewBuilder
@@ -122,7 +182,9 @@ struct TranscriptionInfoPanel: View {
                         requestMessageBlock(title: "User Message", message: userMsg)
                     }
 
-                    aiRequestTokenEstimate
+                    if !hasProviderReportedUsage {
+                        aiRequestTokenEstimate
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .hoverCopyButton(
@@ -137,6 +199,23 @@ struct TranscriptionInfoPanel: View {
     }
 
     // MARK: - Helpers
+
+    private var hasProviderReportedUsage: Bool {
+        transcription.aiPromptTokens != nil
+            || transcription.aiCompletionTokens != nil
+            || transcription.aiTotalTokens != nil
+            || transcription.aiCachedPromptTokens != nil
+            || transcription.aiCacheCreationTokens != nil
+    }
+
+    private var cacheHitDisplayValue: String {
+        if let cached = transcription.aiCachedPromptTokens {
+            return cached > 0
+                ? String(localized: "Yes")
+                : String(localized: "No")
+        }
+        return String(localized: "Unknown")
+    }
 
     private var aiRequestTokenEstimate: some View {
         HStack(spacing: 6) {

@@ -9,6 +9,7 @@ final class AssistantChatService {
         let duration: TimeInterval
         let systemPrompt: String?
         let requestLog: String
+        let usage: LLMUsage?
     }
 
     private let modelContext: ModelContext
@@ -40,7 +41,7 @@ final class AssistantChatService {
         }
 
         let startTime = Date()
-        let text = try await aiService.completeChat(
+        let completion = try await aiService.completeChat(
             provider: provider,
             modelName: modelName,
             messages: chatMessages,
@@ -49,10 +50,11 @@ final class AssistantChatService {
         )
 
         return Reply(
-            text: text,
+            text: completion.text,
             duration: Date().timeIntervalSince(startTime),
             systemPrompt: systemPrompt,
-            requestLog: Self.requestLog(from: messages)
+            requestLog: Self.requestLog(from: messages),
+            usage: completion.usage
         )
     }
 
@@ -69,6 +71,7 @@ final class AssistantChatService {
         transcription.enhancementDuration = response.duration
         transcription.aiRequestSystemMessage = response.systemPrompt
         transcription.aiRequestUserMessage = response.requestLog
+        transcription.applyAIUsage(response.usage)
         transcription.transcriptionStatus = TranscriptionStatus.completed.rawValue
     }
 
@@ -90,6 +93,11 @@ final class AssistantChatService {
             enhancementDuration: response.duration,
             aiRequestSystemMessage: response.systemPrompt,
             aiRequestUserMessage: response.requestLog,
+            aiPromptTokens: response.usage?.promptTokens,
+            aiCompletionTokens: response.usage?.completionTokens,
+            aiTotalTokens: response.usage?.totalTokens,
+            aiCachedPromptTokens: response.usage?.cachedPromptTokens,
+            aiCacheCreationTokens: response.usage?.cacheCreationTokens,
             modeName: modeName,
             modeEmoji: modeEmoji,
             transcriptionStatus: .completed

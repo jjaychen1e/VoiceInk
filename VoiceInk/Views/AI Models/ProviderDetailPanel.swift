@@ -17,6 +17,8 @@ struct ProviderDetailPanel: View {
     @State private var isShowingRemoveAPIKeyConfirmation = false
     @State private var activeDescriptorID = ""
     @AppStorage(DashScopeRegion.userDefaultsKey) private var dashScopeRegionRaw = DashScopeRegion.beijing.rawValue
+    @AppStorage(AlibabaPromptCacheMode.userDefaultsKey) private var alibabaPromptCacheModeRaw =
+        AlibabaPromptCacheMode.explicit.rawValue
 
     private var isConfigured: Bool {
         APIKeyManager.shared.hasAPIKey(forProvider: descriptor.providerKey)
@@ -24,6 +26,10 @@ struct ProviderDetailPanel: View {
 
     private var selectedDashScopeRegion: DashScopeRegion {
         DashScopeRegion(rawValue: dashScopeRegionRaw) ?? .beijing
+    }
+
+    private var selectedAlibabaPromptCacheMode: AlibabaPromptCacheMode {
+        AlibabaPromptCacheMode(rawValue: alibabaPromptCacheModeRaw) ?? .explicit
     }
 
     private var iconName: String {
@@ -42,6 +48,7 @@ struct ProviderDetailPanel: View {
 
                     if isAlibabaProvider {
                         alibabaRegionSection
+                        alibabaPromptCacheSection
                     }
 
                     if descriptor.hasTranscription {
@@ -132,6 +139,46 @@ struct ProviderDetailPanel: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// Prompt-cache mode for Alibaba enhancement / chat requests.
+    private var alibabaPromptCacheSection: some View {
+        ProviderConfigurationGroup(title: "Prompt Cache") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker(
+                    "Prompt Cache",
+                    selection: Binding(
+                        get: { selectedAlibabaPromptCacheMode },
+                        set: { alibabaPromptCacheModeRaw = $0.rawValue }
+                    )
+                ) {
+                    ForEach(AlibabaPromptCacheMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(alibabaPromptCacheHelpText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var alibabaPromptCacheHelpText: String {
+        switch selectedAlibabaPromptCacheMode {
+        case .explicit:
+            return String(
+                localized:
+                    "Explicit sends cache_control on the system prompt. Hits are deterministic for about 5 minutes."
+            )
+        case .implicit:
+            return String(
+                localized:
+                    "Implicit omits cache_control and relies on DashScope automatic prefix caching. Hits are best-effort."
+            )
         }
     }
 

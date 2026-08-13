@@ -14,8 +14,32 @@ struct MenuBarView: View {
     @EnvironmentObject var aiService: AIService
     @ObservedObject private var launchAtLoginManager = LaunchAtLoginManager.shared
     @ObservedObject private var modeManager = ModeManager.shared
+    @ObservedObject private var liveTranscribeController = LiveTranscribeController.shared
     @ObservedObject var audioDeviceManager = AudioDeviceManager.shared
     @AppStorage("hasCompletedOnboardingV2") private var hasCompletedOnboardingV2 = false
+
+    private let liveTranslateSourceLanguages: [(code: String, label: String)] = [
+        ("en", "English"),
+        ("zh", "Chinese"),
+        ("ja", "Japanese"),
+        ("ko", "Korean"),
+        ("fr", "French"),
+        ("de", "German"),
+        ("es", "Spanish"),
+        ("ru", "Russian"),
+        ("auto", "Auto-detect"),
+    ]
+
+    private let liveTranslateTargetLanguages: [(code: String, label: String)] = [
+        ("zh", "Chinese"),
+        ("en", "English"),
+        ("ja", "Japanese"),
+        ("ko", "Korean"),
+        ("fr", "French"),
+        ("de", "German"),
+        ("es", "Spanish"),
+        ("ru", "Russian"),
+    ]
 
     var body: some View {
         VStack {
@@ -108,6 +132,8 @@ struct MenuBarView: View {
                 }
             }
 
+            liveTranslateMenu
+
             Divider()
 
             Button("Retry Last Transcription") {
@@ -164,6 +190,118 @@ struct MenuBarView: View {
                 NSApplication.shared.terminate(nil)
             }
         }
+    }
+
+    /// Menu Bar entry for Live Translate with nested Translate / language menus.
+    private var liveTranslateMenu: some View {
+        Menu {
+            Button {
+                Task {
+                    await liveTranscribeController.toggle(modelContext: engine.modelContext)
+                }
+            } label: {
+                Text(liveTranscribeController.isRunning ? "Stop" : "Start")
+            }
+            .disabled(
+                liveTranscribeController.isSwitchingPipeline
+                    || (!liveTranscribeController.isRunning && !liveTranscribeController.hasAlibabaAPIKey)
+            )
+
+            if liveTranscribeController.isRunning {
+                Button("Show Caption Window") {
+                    liveTranscribeController.bringCaptionWindowToFront()
+                }
+            }
+
+            Divider()
+
+            Menu {
+                Button {
+                    Task { await liveTranscribeController.applyTranslationEnabled(true) }
+                } label: {
+                    Text(liveTranscribeController.isTranslationEnabled ? "On  ✓" : "On")
+                }
+                .disabled(liveTranscribeController.isSwitchingPipeline)
+
+                Button {
+                    Task { await liveTranscribeController.applyTranslationEnabled(false) }
+                } label: {
+                    Text(liveTranscribeController.isTranslationEnabled ? "Off" : "Off  ✓")
+                }
+                .disabled(liveTranscribeController.isSwitchingPipeline)
+            } label: {
+                Text(
+                    liveTranscribeController.isTranslationEnabled
+                        ? "Translate: On"
+                        : "Translate: Off"
+                )
+            }
+
+            Menu {
+                ForEach(liveTranslateSourceLanguages, id: \.code) { language in
+                    Button {
+                        liveTranscribeController.sourceLanguage = language.code
+                    } label: {
+                        Text(
+                            liveTranscribeController.sourceLanguage == language.code
+                                ? "\(language.label)  ✓"
+                                : language.label
+                        )
+                    }
+                }
+            } label: {
+                Text("Source: \(languageLabel(for: liveTranscribeController.sourceLanguage, in: liveTranslateSourceLanguages))")
+            }
+            .disabled(liveTranscribeController.isRunning)
+
+            Menu {
+                ForEach(liveTranslateTargetLanguages, id: \.code) { language in
+                    Button {
+                        liveTranscribeController.targetLanguage = language.code
+                    } label: {
+                        Text(
+                            liveTranscribeController.targetLanguage == language.code
+                                ? "\(language.label)  ✓"
+                                : language.label
+                        )
+                    }
+                }
+            } label: {
+                Text("Target: \(languageLabel(for: liveTranscribeController.targetLanguage, in: liveTranslateTargetLanguages))")
+            }
+            .disabled(liveTranscribeController.isRunning || !liveTranscribeController.isTranslationEnabled)
+
+            Divider()
+
+            Button("Open Live Transcribe…") {
+                showMainWindowAndNavigate(to: "Live Transcribe")
+            }
+        } label: {
+            HStack {
+                Image(systemName: "captions.bubble.fill")
+                    .font(.system(size: 11, weight: .medium))
+                Text(liveTranslateMenuTitle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10))
+            }
+        }
+    }
+
+    private var liveTranslateMenuTitle: String {
+        if liveTranscribeController.isRunning {
+            return liveTranscribeController.isTranslationEnabled
+                ? String(localized: "Live Translate: On")
+                : String(localized: "Live Translate: Captions")
+        }
+        return String(localized: "Live Translate")
+    }
+
+    /// Resolves a language code to its menu label.
+    private func languageLabel(
+        for code: String,
+        in options: [(code: String, label: String)]
+    ) -> String {
+        options.first(where: { $0.code == code })?.label ?? code.uppercased()
     }
 
     private func showMainWindow() {

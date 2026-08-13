@@ -199,8 +199,12 @@ private struct AVPlayerViewRepresentable: NSViewRepresentable {
 
 /// Separate-window UI: video surface + optional subtitle sidebar + transport.
 struct LinkedVideoPlayerView: View {
-    private static let sidebarWidth: CGFloat = 320
+    private static let defaultSidebarWidth: Double = 320
+    private static let minSidebarWidth: Double = 220
+    private static let maxSidebarWidth: Double = 560
+    private static let minVideoWidth: CGFloat = 640
     private static let sidebarVisibilityKey = "linkedVideoShowsSubtitleSidebar"
+    private static let sidebarWidthKey = "linkedVideoSubtitleSidebarWidth"
 
     let videoURL: URL
     let sentences: [TranscriptionTimedSentence]
@@ -210,6 +214,9 @@ struct LinkedVideoPlayerView: View {
 
     @StateObject private var coordinator = LinkedVideoPlaybackCoordinator()
     @AppStorage(Self.sidebarVisibilityKey) private var showsSubtitleSidebar = false
+    @AppStorage(Self.sidebarWidthKey) private var sidebarWidth = LinkedVideoPlayerView.defaultSidebarWidth
+    @State private var isResizeHandleHovered = false
+    @State private var dragStartSidebarWidth: Double?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -218,9 +225,9 @@ struct LinkedVideoPlayerView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if showsSubtitleSidebar, !sentences.isEmpty {
-                    Divider()
+                    sidebarResizeHandle
                     subtitleSidebar
-                        .frame(width: Self.sidebarWidth)
+                        .frame(width: CGFloat(clampedSidebarWidth))
                         .frame(maxHeight: .infinity)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
@@ -229,17 +236,32 @@ struct LinkedVideoPlayerView: View {
 
             transportBar
         }
-        .frame(
-            minWidth: showsSubtitleSidebar && !sentences.isEmpty ? 960 : 720,
-            minHeight: 480
-        )
+        .frame(minWidth: contentMinWidth, minHeight: 480)
         .onAppear {
+            sidebarWidth = Self.clampSidebarWidth(sidebarWidth)
             NotificationCenter.default.post(name: .pauseTranscriptionAudio, object: nil)
             coordinator.load(url: videoURL, sentences: sentences, startAt: startAt)
         }
         .onDisappear {
             coordinator.cleanup()
         }
+    }
+
+    /// Window min width keeps a usable video stage when the sidebar is open.
+    private var contentMinWidth: CGFloat {
+        if showsSubtitleSidebar, !sentences.isEmpty {
+            return Self.minVideoWidth + CGFloat(clampedSidebarWidth) + 6
+        }
+        return 720
+    }
+
+    private var clampedSidebarWidth: Double {
+        Self.clampSidebarWidth(sidebarWidth)
+    }
+
+    /// Clamps a sidebar width into the supported drag range.
+    private static func clampSidebarWidth(_ width: Double) -> Double {
+        min(max(width, minSidebarWidth), maxSidebarWidth)
     }
 
     private var videoStage: some View {
@@ -282,6 +304,56 @@ struct LinkedVideoPlayerView: View {
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(AppTheme.Surface.materialCard)
+    }
+
+    /// Drag handle between the video stage and subtitle sidebar.
+    private var sidebarResizeHandle: some View {
+        ZStack {
+            Rectangle()
+                .fill(AppTheme.Surface.subtle.opacity(0.35))
+                .frame(width: 1)
+
+            Capsule()
+                .fill(
+                    isResizeHandleHovered || dragStartSidebarWidth != nil
+                        ? AppTheme.Text.primary.opacity(0.45)
+                        : AppTheme.Text.muted.opacity(0.35)
+                )
+                .frame(width: 3, height: 28)
+        }
+        .frame(width: 6)
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isResizeHandleHovered = hovering
+            updateResizeCursor()
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .local)
+                .onChanged { value in
+                    if dragStartSidebarWidth == nil {
+                        dragStartSidebarWidth = clampedSidebarWidth
+                        updateResizeCursor()
+                    }
+                    // Dragging left widens the trailing sidebar; right narrows it.
+                    let proposed = (dragStartSidebarWidth ?? clampedSidebarWidth) - value.translation.width
+                    sidebarWidth = Self.clampSidebarWidth(proposed)
+                }
+                .onEnded { _ in
+                    dragStartSidebarWidth = nil
+                    updateResizeCursor()
+                }
+        )
+        .help("Drag to resize subtitle sidebar")
+    }
+
+    /// Shows the horizontal resize cursor while hovering or dragging the handle.
+    private func updateResizeCursor() {
+        if isResizeHandleHovered || dragStartSidebarWidth != nil {
+            NSCursor.resizeLeftRight.set()
+        } else {
+            NSCursor.arrow.set()
+        }
     }
 
     private var transportBar: some View {

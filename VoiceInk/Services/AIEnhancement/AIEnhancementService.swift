@@ -12,6 +12,8 @@ struct AIEnhancementResult: Sendable {
     let userMessage: String?
     /// Enhanced sentences reusing Filetrans time windows (OpenAI-compatible timed path only).
     let timedSentences: [TranscriptionTimedSentence]?
+    /// Provider-reported token usage when the LLM response included it.
+    let usage: LLMUsage?
 
     init(
         text: String,
@@ -19,7 +21,8 @@ struct AIEnhancementResult: Sendable {
         promptName: String?,
         systemMessage: String?,
         userMessage: String?,
-        timedSentences: [TranscriptionTimedSentence]? = nil
+        timedSentences: [TranscriptionTimedSentence]? = nil,
+        usage: LLMUsage? = nil
     ) {
         self.text = text
         self.duration = duration
@@ -27,6 +30,7 @@ struct AIEnhancementResult: Sendable {
         self.systemMessage = systemMessage
         self.userMessage = userMessage
         self.timedSentences = timedSentences
+        self.usage = usage
     }
 }
 
@@ -126,11 +130,46 @@ class AIEnhancementService: ObservableObject {
         lastRequestTime = Date()
     }
 
+    /// Stable instructions/vocab for the system role, plus per-recording context for the user role.
+    private struct EnhancementPromptParts {
+        /// Prompt template + custom vocabulary — stable enough to explicitly cache on Alibaba/Qwen.
+        let cacheableSystemMessage: String
+        /// Selected text / clipboard / screen capture — changes often, keep out of the cache prefix.
+        let dynamicContextSection: String
+
+        /// Combined system message used by providers that do not split cacheable vs dynamic parts.
+        var combinedSystemMessage: String {
+            [cacheableSystemMessage, dynamicContextSection]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+        }
+
+        /// Prepends dynamic context to a user payload when present.
+        func userMessage(baseUserMessage: String) -> String {
+            [dynamicContextSection, baseUserMessage]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+        }
+    }
+
     private func getSystemMessage(
         prompt: CustomPrompt,
         configuration: EnhancementRuntimeConfiguration,
         contextSnapshot: RecordingContextSnapshot?
     ) async -> String {
+        await getPromptParts(
+            prompt: prompt,
+            configuration: configuration,
+            contextSnapshot: contextSnapshot
+        ).combinedSystemMessage
+    }
+
+    /// Builds cache-friendly prompt parts: stable system text first, dynamic context separately.
+    private func getPromptParts(
+        prompt: CustomPrompt,
+        configuration: EnhancementRuntimeConfiguration,
+        contextSnapshot: RecordingContextSnapshot?
+    ) async -> EnhancementPromptParts {
         let useSelectedText = configuration.useSelectedTextContext
         let useClipboard = configuration.useClipboardContext
         let useScreenCapture = configuration.useScreenCaptureContext
@@ -197,9 +236,14 @@ class AIEnhancementService: ObservableObject {
                 ""
             }
 
-        return [prompt.finalPromptText, customVocabularySection, contextSection]
+        let cacheableSystemMessage = [prompt.finalPromptText, customVocabularySection]
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
+
+        return EnhancementPromptParts(
+            cacheableSystemMessage: cacheableSystemMessage,
+            dynamicContextSection: contextSection
+        )
     }
 
     private func makeRequest(
@@ -207,7 +251,9 @@ class AIEnhancementService: ObservableObject {
         configuration: EnhancementRuntimeConfiguration,
         contextSnapshot: RecordingContextSnapshot?,
         timeout: TimeInterval
-    ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
+    ) async throws -> (
+        text: String, systemMessage: String?, userMessage: String?, usage: LLMUsage?
+    ) {
         guard isConfigured(for: configuration) else {
             throw EnhancementError.notConfigured
         }
@@ -217,7 +263,7 @@ class AIEnhancementService: ObservableObject {
         }
 
         guard !text.isEmpty else {
-            return ("", nil, nil)
+            return ("", nil, nil, nil)
         }
 
         if provider == .voiceInkRefine {
@@ -232,7 +278,8 @@ class AIEnhancementService: ObservableObject {
                 return (
                     filteredResult,
                     nil,
-                    text
+                    text,
+                    nil
                 )
             } catch is CancellationError {
                 throw CancellationError()
@@ -246,17 +293,30 @@ class AIEnhancementService: ObservableObject {
         }
 
         let modelName = configuration.modelName ?? provider.defaultModel
-        let formattedText = "\n<TRANSCRIPT>\n\(text)\n</TRANSCRIPT>"
-        let systemMessage = await getSystemMessage(
+        let formattedTranscript = "\n<TRANSCRIPT>\n\(text)\n</TRANSCRIPT>"
+        let promptParts = await getPromptParts(
             prompt: prompt,
             configuration: configuration,
             contextSnapshot: contextSnapshot
         )
+        let usesAlibabaPromptLayout = provider == .alibaba
+        let usesExplicitPromptCache =
+            usesAlibabaPromptLayout && AlibabaPromptCacheMode.current.usesExplicitCacheControl
+        let systemMessage: String
+        let userMessage: String
+        if usesAlibabaPromptLayout {
+            // Keep only stable instructions/vocab in system so DashScope prefix/explicit cache can hit.
+            systemMessage = promptParts.cacheableSystemMessage
+            userMessage = promptParts.userMessage(baseUserMessage: formattedTranscript)
+        } else {
+            systemMessage = promptParts.combinedSystemMessage
+            userMessage = formattedTranscript
+        }
 
         if provider == .ollama {
             do {
                 let result = try await aiService.enhanceWithOllama(
-                    text: formattedText,
+                    text: userMessage,
                     systemPrompt: systemMessage,
                     model: modelName,
                     timeout: timeout
@@ -264,7 +324,8 @@ class AIEnhancementService: ObservableObject {
                 return (
                     AIEnhancementOutputFilter.filter(result),
                     systemMessage,
-                    formattedText
+                    userMessage,
+                    nil
                 )
             } catch {
                 if let localError = error as? LocalAIError {
@@ -284,11 +345,12 @@ class AIEnhancementService: ObservableObject {
         if provider == .localCLI {
             do {
                 let result = try await aiService.enhanceWithLocalCLI(
-                    systemPrompt: systemMessage, userPrompt: formattedText)
+                    systemPrompt: systemMessage, userPrompt: userMessage)
                 return (
                     AIEnhancementOutputFilter.filter(result),
                     systemMessage,
-                    formattedText
+                    userMessage,
+                    nil
                 )
             } catch {
                 if let localError = error as? LocalCLIError {
@@ -303,23 +365,24 @@ class AIEnhancementService: ObservableObject {
         try await waitForRateLimit()
 
         do {
-            let result: String
+            let completion: LLMChatCompletion
             switch provider {
             case .gemini:
-                result = try await GeminiLLMClient.chatCompletion(
+                let result = try await GeminiLLMClient.chatCompletion(
                     apiKey: try apiKey(for: provider, modelName: modelName),
                     model: modelName,
-                    messages: [.user(formattedText)],
+                    messages: [.user(userMessage)],
                     systemPrompt: systemMessage,
                     thinkingLevel: ReasoningConfig.geminiThinkingLevel(for: modelName),
                     store: false,
                     timeout: timeout
                 )
+                completion = LLMChatCompletion(text: result, usage: nil)
             case .anthropic:
-                result = try await AnthropicLLMClient.chatCompletion(
+                completion = try await AnthropicUsageChatClient.chatCompletion(
                     apiKey: try apiKey(for: provider, modelName: modelName),
                     model: modelName,
-                    messages: [.user(formattedText)],
+                    messages: [.user(userMessage)],
                     systemPrompt: systemMessage,
                     timeout: timeout
                 )
@@ -330,11 +393,11 @@ class AIEnhancementService: ObservableObject {
                 else {
                     throw EnhancementError.notConfigured
                 }
-                result = try await OptionalTemperatureOpenAIClient.chatCompletion(
+                completion = try await OptionalTemperatureOpenAIClient.chatCompletion(
                     baseURL: baseURL,
                     apiKey: customConfiguration.apiKey,
                     model: customConfiguration.modelName,
-                    messages: [.user(formattedText)],
+                    messages: [.user(userMessage)],
                     systemPrompt: systemMessage,
                     temperature: customConfiguration.temperature,
                     reasoningEffort: customConfiguration.reasoningEffort,
@@ -354,24 +417,26 @@ class AIEnhancementService: ObservableObject {
                     for: provider,
                     modelName: modelName
                 )
-                result = try await OpenAILLMClient.chatCompletion(
+                completion = try await OptionalTemperatureOpenAIClient.chatCompletion(
                     baseURL: baseURL,
                     apiKey: try apiKey(for: provider, modelName: modelName),
                     model: modelName,
-                    messages: [.user(formattedText)],
+                    messages: [.user(userMessage)],
                     systemPrompt: systemMessage,
                     temperature: temperature,
                     reasoningEffort: reasoningEffort,
                     extraBody: extraBody,
+                    enableSystemPromptCache: usesExplicitPromptCache,
                     timeout: timeout
                 )
             }
             return (
                 AIEnhancementOutputFilter.filter(
-                    result.trimmingCharacters(in: .whitespacesAndNewlines)
+                    completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 ),
                 systemMessage,
-                formattedText
+                userMessage,
+                completion.usage
             )
         } catch let error as LLMKitError {
             throw mapLLMKitError(error)
@@ -432,7 +497,9 @@ class AIEnhancementService: ObservableObject {
         timeout: TimeInterval,
         maxRetries: Int = 3,
         initialDelay: TimeInterval = 1.0
-    ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
+    ) async throws -> (
+        text: String, systemMessage: String?, userMessage: String?, usage: LLMUsage?
+    ) {
         var retries = 0
         var currentDelay = initialDelay
 
@@ -479,7 +546,9 @@ class AIEnhancementService: ObservableObject {
         configuration: EnhancementRuntimeConfiguration,
         contextSnapshot: RecordingContextSnapshot?,
         timeout: TimeInterval
-    ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
+    ) async throws -> (
+        text: String, systemMessage: String?, userMessage: String?, usage: LLMUsage?
+    ) {
         guard isConfigured(for: configuration) else {
             throw EnhancementError.notConfigured
         }
@@ -493,19 +562,33 @@ class AIEnhancementService: ObservableObject {
         }
 
         let modelName = configuration.modelName ?? provider.defaultModel
-        let baseSystem = await getSystemMessage(
+        let promptParts = await getPromptParts(
             prompt: prompt,
             configuration: configuration,
             contextSnapshot: contextSnapshot
         )
-        let systemMessage = [baseSystem, TimedSentenceEnhancement.systemAddon]
+        let usesAlibabaPromptLayout = provider == .alibaba
+        let usesExplicitPromptCache =
+            usesAlibabaPromptLayout && AlibabaPromptCacheMode.current.usesExplicitCacheControl
+        let cacheableSystem = [promptParts.cacheableSystemMessage, TimedSentenceEnhancement.systemAddon]
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
+        let systemMessage: String
+        let resolvedUserMessage: String
+        if usesAlibabaPromptLayout {
+            systemMessage = cacheableSystem
+            resolvedUserMessage = promptParts.userMessage(baseUserMessage: userMessage)
+        } else {
+            systemMessage = [promptParts.combinedSystemMessage, TimedSentenceEnhancement.systemAddon]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            resolvedUserMessage = userMessage
+        }
 
         try await waitForRateLimit()
 
         do {
-            let result: String
+            let completion: LLMChatCompletion
             if provider == .custom {
                 guard
                     let customConfiguration = CustomAIProviderManager.shared.requestConfiguration(forModel: modelName),
@@ -513,11 +596,11 @@ class AIEnhancementService: ObservableObject {
                 else {
                     throw EnhancementError.notConfigured
                 }
-                result = try await OptionalTemperatureOpenAIClient.chatCompletion(
+                completion = try await OptionalTemperatureOpenAIClient.chatCompletion(
                     baseURL: baseURL,
                     apiKey: customConfiguration.apiKey,
                     model: customConfiguration.modelName,
-                    messages: [.user(userMessage)],
+                    messages: [.user(resolvedUserMessage)],
                     systemPrompt: systemMessage,
                     temperature: customConfiguration.temperature,
                     reasoningEffort: customConfiguration.reasoningEffort,
@@ -541,25 +624,27 @@ class AIEnhancementService: ObservableObject {
                 for (key, value) in Self.jsonObjectResponseFormat {
                     extraBody[key] = value
                 }
-                result = try await OpenAILLMClient.chatCompletion(
+                completion = try await OptionalTemperatureOpenAIClient.chatCompletion(
                     baseURL: baseURL,
                     apiKey: try apiKey(for: provider, modelName: modelName),
                     model: modelName,
-                    messages: [.user(userMessage)],
+                    messages: [.user(resolvedUserMessage)],
                     systemPrompt: systemMessage,
                     temperature: temperature,
                     reasoningEffort: reasoningEffort,
                     extraBody: extraBody,
+                    enableSystemPromptCache: usesExplicitPromptCache,
                     timeout: timeout
                 )
             }
 
             return (
                 AIEnhancementOutputFilter.filter(
-                    result.trimmingCharacters(in: .whitespacesAndNewlines)
+                    completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 ),
                 systemMessage,
-                userMessage
+                resolvedUserMessage,
+                completion.usage
             )
         } catch let error as LLMKitError {
             throw mapLLMKitError(error)
@@ -577,7 +662,9 @@ class AIEnhancementService: ObservableObject {
         timeout: TimeInterval,
         maxRetries: Int = 3,
         initialDelay: TimeInterval = 1.0
-    ) async throws -> (text: String, systemMessage: String?, userMessage: String?) {
+    ) async throws -> (
+        text: String, systemMessage: String?, userMessage: String?, usage: LLMUsage?
+    ) {
         var retries = 0
         var currentDelay = initialDelay
 
@@ -671,7 +758,8 @@ class AIEnhancementService: ObservableObject {
                 duration: duration,
                 promptName: promptName,
                 systemMessage: requestResult.systemMessage,
-                userMessage: requestResult.userMessage
+                userMessage: requestResult.userMessage,
+                usage: requestResult.usage
             )
         } catch {
             let errorDescription = EnhancementFailureFormatter.description(for: error)
@@ -730,7 +818,8 @@ class AIEnhancementService: ObservableObject {
                 promptName: promptName,
                 systemMessage: requestResult.systemMessage,
                 userMessage: requestResult.userMessage,
-                timedSentences: enhancedSentences
+                timedSentences: enhancedSentences,
+                usage: requestResult.usage
             )
         } catch {
             let errorDescription = EnhancementFailureFormatter.description(for: error)
