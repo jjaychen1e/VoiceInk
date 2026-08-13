@@ -137,11 +137,16 @@ final class LicenseManager: LicenseStoring {
         case .value(let value):
             trialStartDate = value
         case .notFound:
-            let startDate = Date()
-            guard storeTrialStartDate(startDate) else {
-                return .unavailable(errSecIO)
-            }
-            trialStartDate = startDate
+            #if LOCAL_BUILD
+                // Local builds skip Polar trial enrollment.
+                trialStartDate = nil
+            #else
+                let startDate = Date()
+                guard storeTrialStartDate(startDate) else {
+                    return .unavailable(errSecIO)
+                }
+                trialStartDate = startDate
+            #endif
         case .unavailable(let status):
             return .unavailable(status)
         }

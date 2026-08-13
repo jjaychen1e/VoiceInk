@@ -451,24 +451,29 @@ final class LicenseViewModel: ObservableObject {
     }
 
     private func resolvedState(at date: Date) -> LicenseState {
-        if storedLicenseKey != nil,
-            activationId != nil || !requiresActivation
-        {
+        #if LOCAL_BUILD
+            // Self-signed local builds are not Polar-licensed installs.
             return .licensed
-        }
+        #else
+            if storedLicenseKey != nil,
+                activationId != nil || !requiresActivation
+            {
+                return .licensed
+            }
 
-        guard let trialStartDate else {
-            return .unlicensed
-        }
+            guard let trialStartDate else {
+                return .unlicensed
+            }
 
-        let rawDays = Calendar.current.dateComponents([.day], from: trialStartDate, to: date).day ?? 0
-        let daysSinceTrialStart = max(0, rawDays)
+            let rawDays = Calendar.current.dateComponents([.day], from: trialStartDate, to: date).day ?? 0
+            let daysSinceTrialStart = max(0, rawDays)
 
-        if daysSinceTrialStart >= trialPeriodDays {
-            return .trialExpired
-        }
+            if daysSinceTrialStart >= trialPeriodDays {
+                return .trialExpired
+            }
 
-        return .trial(daysRemaining: min(trialPeriodDays, trialPeriodDays - daysSinceTrialStart))
+            return .trial(daysRemaining: min(trialPeriodDays, trialPeriodDays - daysSinceTrialStart))
+        #endif
     }
 
     private func scheduleStorageRetryIfNeeded() {

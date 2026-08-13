@@ -3,6 +3,12 @@ import Security
 import os
 
 /// Stores credentials with caller-selected Keychain synchronization and accessibility.
+///
+/// Local (`LOCAL_BUILD`) installs cannot reliably use the system Keychain: iCloud
+/// syncable items need a Developer Team ID, and codesign identity changes drop
+/// Keychain access. Those builds persist secrets in UserDefaults under
+/// `LocalKeychain_` instead, which is how Alibaba/other API keys survived rebuilds
+/// before the upstream Keychain rewrite.
 final class KeychainService {
     static let shared = KeychainService()
 
@@ -26,6 +32,11 @@ final class KeychainService {
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "KeychainService")
     private let service = "com.prakashjoshipax.VoiceInk"
 
+    #if LOCAL_BUILD
+        private let defaults = UserDefaults.standard
+        private let localPrefix = "LocalKeychain_"
+    #endif
+
     private init() {}
 
     // MARK: - Public API
@@ -45,7 +56,7 @@ final class KeychainService {
         return save(data: data, forKey: key, syncable: syncable, accessibility: accessibility)
     }
 
-    /// Saves data to Keychain.
+    /// Saves data to Keychain, or to UserDefaults in local builds.
     @discardableResult
     func save(
         data: Data,
@@ -53,54 +64,60 @@ final class KeychainService {
         syncable: Bool = true,
         accessibility: Accessibility? = nil
     ) -> Bool {
-        let query = baseQuery(forKey: key, syncable: syncable)
-        var attributes: [String: Any] = [kSecValueData as String: data]
-        if let accessibility {
-            attributes[kSecAttrAccessible as String] = accessibility.value
-        }
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-
-        if updateStatus == errSecSuccess {
-            logger.info("Successfully updated keychain item for key: \(key, privacy: .public)")
+        #if LOCAL_BUILD
+            defaults.set(data, forKey: localPrefix + key)
             return true
-        }
+        #else
+            let query = baseQuery(forKey: key, syncable: syncable)
+            var attributes: [String: Any] = [kSecValueData as String: data]
+            if let accessibility {
+                attributes[kSecAttrAccessible as String] = accessibility.value
+            }
+            let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
 
-        guard updateStatus == errSecItemNotFound else {
-            logger.error(
-                "Failed to update keychain item for key: \(key, privacy: .public), status: \(updateStatus, privacy: .public)"
-            )
-            return false
-        }
-
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        if let accessibility {
-            addQuery[kSecAttrAccessible as String] = accessibility.value
-        }
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-
-        if addStatus == errSecSuccess {
-            logger.info("Successfully saved keychain item for key: \(key, privacy: .public)")
-            return true
-        }
-
-        if addStatus == errSecDuplicateItem {
-            let retryStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-            if retryStatus == errSecSuccess {
-                logger.info("Successfully updated concurrently created keychain item for key: \(key, privacy: .public)")
+            if updateStatus == errSecSuccess {
+                logger.info("Successfully updated keychain item for key: \(key, privacy: .public)")
                 return true
             }
 
+            guard updateStatus == errSecItemNotFound else {
+                logger.error(
+                    "Failed to update keychain item for key: \(key, privacy: .public), status: \(updateStatus, privacy: .public)"
+                )
+                return false
+            }
+
+            var addQuery = query
+            addQuery[kSecValueData as String] = data
+            if let accessibility {
+                addQuery[kSecAttrAccessible as String] = accessibility.value
+            }
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+
+            if addStatus == errSecSuccess {
+                logger.info("Successfully saved keychain item for key: \(key, privacy: .public)")
+                return true
+            }
+
+            if addStatus == errSecDuplicateItem {
+                let retryStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+                if retryStatus == errSecSuccess {
+                    logger.info(
+                        "Successfully updated concurrently created keychain item for key: \(key, privacy: .public)")
+                    return true
+                }
+
+                logger.error(
+                    "Failed to update concurrently created keychain item for key: \(key, privacy: .public), status: \(retryStatus, privacy: .public)"
+                )
+                return false
+            }
+
             logger.error(
-                "Failed to update concurrently created keychain item for key: \(key, privacy: .public), status: \(retryStatus, privacy: .public)"
+                "Failed to save keychain item for key: \(key, privacy: .public), status: \(addStatus, privacy: .public)"
             )
             return false
-        }
-
-        logger.error(
-            "Failed to save keychain item for key: \(key, privacy: .public), status: \(addStatus, privacy: .public)"
-        )
-        return false
+        #endif
     }
 
     /// Retrieves a string value from Keychain.
@@ -137,74 +154,92 @@ final class KeychainService {
 
     /// Retrieves data while preserving the Security framework status.
     func readData(forKey key: String, syncable: Bool = true) -> ReadResult<Data> {
-        var query = baseQuery(forKey: key, syncable: syncable)
-        query[kSecReturnData as String] = kCFBooleanTrue
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        if status == errSecSuccess {
-            guard let data = result as? Data else {
-                logger.error("Keychain returned invalid data for key: \(key, privacy: .public)")
-                return .unavailable(errSecDecode)
+        #if LOCAL_BUILD
+            if let data = defaults.data(forKey: localPrefix + key) {
+                return .value(data)
             }
-            return .value(data)
-        }
-
-        if status == errSecItemNotFound {
             return .notFound
-        }
+        #else
+            var query = baseQuery(forKey: key, syncable: syncable)
+            query[kSecReturnData as String] = kCFBooleanTrue
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
 
-        logger.error(
-            "Failed to retrieve keychain item for key: \(key, privacy: .public), status: \(status, privacy: .public)"
-        )
-        return .unavailable(status)
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+            if status == errSecSuccess {
+                guard let data = result as? Data else {
+                    logger.error("Keychain returned invalid data for key: \(key, privacy: .public)")
+                    return .unavailable(errSecDecode)
+                }
+                return .value(data)
+            }
+
+            if status == errSecItemNotFound {
+                return .notFound
+            }
+
+            logger.error(
+                "Failed to retrieve keychain item for key: \(key, privacy: .public), status: \(status, privacy: .public)"
+            )
+            return .unavailable(status)
+        #endif
     }
 
     /// Deletes an item from Keychain.
     @discardableResult
     func delete(forKey key: String, syncable: Bool = true) -> Bool {
-        let query = baseQuery(forKey: key, syncable: syncable)
-        let status = SecItemDelete(query as CFDictionary)
-
-        if status == errSecSuccess || status == errSecItemNotFound {
-            if status == errSecSuccess {
-                logger.info("Successfully deleted keychain item for key: \(key, privacy: .public)")
-            }
+        #if LOCAL_BUILD
+            defaults.removeObject(forKey: localPrefix + key)
             return true
-        } else {
-            logger.error(
-                "Failed to delete keychain item for key: \(key, privacy: .public), status: \(status, privacy: .public)"
-            )
-            return false
-        }
+        #else
+            let query = baseQuery(forKey: key, syncable: syncable)
+            let status = SecItemDelete(query as CFDictionary)
+
+            if status == errSecSuccess || status == errSecItemNotFound {
+                if status == errSecSuccess {
+                    logger.info("Successfully deleted keychain item for key: \(key, privacy: .public)")
+                }
+                return true
+            } else {
+                logger.error(
+                    "Failed to delete keychain item for key: \(key, privacy: .public), status: \(status, privacy: .public)"
+                )
+                return false
+            }
+        #endif
     }
 
     /// Checks if a key exists in Keychain.
     func exists(forKey key: String, syncable: Bool = true) -> Bool {
-        var query = baseQuery(forKey: key, syncable: syncable)
-        query[kSecReturnData as String] = kCFBooleanFalse
+        #if LOCAL_BUILD
+            return defaults.data(forKey: localPrefix + key) != nil
+        #else
+            var query = baseQuery(forKey: key, syncable: syncable)
+            query[kSecReturnData as String] = kCFBooleanFalse
 
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
-        return status == errSecSuccess
+            let status = SecItemCopyMatching(query as CFDictionary, nil)
+            return status == errSecSuccess
+        #endif
     }
 
     // MARK: - Private Helpers
 
-    /// Creates a base Keychain query.
-    private func baseQuery(forKey key: String, syncable: Bool) -> [String: Any] {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecUseDataProtectionKeychain as String: true,
-        ]
+    #if !LOCAL_BUILD
+        /// Creates a base Keychain query.
+        private func baseQuery(forKey key: String, syncable: Bool) -> [String: Any] {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key,
+                kSecUseDataProtectionKeychain as String: true,
+            ]
 
-        if syncable {
-            query[kSecAttrSynchronizable as String] = kCFBooleanTrue
+            if syncable {
+                query[kSecAttrSynchronizable as String] = kCFBooleanTrue
+            }
+
+            return query
         }
-
-        return query
-    }
+    #endif
 }

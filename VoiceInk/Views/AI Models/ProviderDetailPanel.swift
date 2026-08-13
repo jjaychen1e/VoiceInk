@@ -559,7 +559,15 @@ struct ProviderDetailPanel: View {
                 verificationSucceeded = result.isValid
 
                 if result.isValid {
-                    APIKeyManager.shared.saveAPIKey(trimmedKey, forProvider: descriptor.providerKey)
+                    let didSave = APIKeyManager.shared.saveAPIKey(trimmedKey, forProvider: descriptor.providerKey)
+                    guard didSave else {
+                        verificationSucceeded = false
+                        verificationMessage = String(
+                            localized: "The key is valid, but VoiceInk could not save it on this Mac.")
+                        verificationDetailMessage = String(
+                            localized: "Quit VoiceInk and try again. Local builds store keys outside the system Keychain.")
+                        return
+                    }
                     if let provider = descriptor.aiProvider, aiService.selectedProvider == provider {
                         aiService.apiKey = trimmedKey
                         aiService.isAPIKeyValid = true
