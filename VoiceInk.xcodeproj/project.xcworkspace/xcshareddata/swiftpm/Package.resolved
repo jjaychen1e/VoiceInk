@@ -1,5 +1,5 @@
 {
-  "originHash" : "92f23ea9771bf7c4e072587ae3f8c003da396a7e6291a65c2ad4acb671979963",
+  "originHash" : "a16b09e2c0e3fee7d86fbd260972eb0b946296e1771f315691d250410632fd8c",
   "pins" : [
     {
       "identity" : "axswift",
@@ -43,7 +43,7 @@
       "location" : "https://github.com/Beingpax/LLMkit.git",
       "state" : {
         "branch" : "main",
-        "revision" : "7c32712a286221dab39da7e40d824a6d55e33dad"
+        "revision" : "3b9086e3df729f39c2ca8951d09fb6ef4d4a193b"
       }
     },
     {
@@ -223,6 +223,15 @@
       "state" : {
         "revision" : "b38443e44d93eca770f2eb68e2a4d0fa100f9aa2",
         "version" : "1.3.0"
+      }
+    },
+    {
+      "identity" : "transcribe-cpp-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Beingpax/Transcribe-cpp-swift.git",
+      "state" : {
+        "revision" : "fb1c1ad99e8939a69fcfb613417d9635fb77ef42",
+        "version" : "0.2.0-dev.856d7c1"
       }
     },
     {

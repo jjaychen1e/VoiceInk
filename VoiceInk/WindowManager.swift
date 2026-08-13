@@ -3,7 +3,7 @@ import SwiftUI
 
 enum AppWindowLayout {
     static let width: CGFloat = 950
-    static let minimumHeight: CGFloat = 730
+    static let minimumHeight: CGFloat = 750
 }
 
 enum AppWindowID {

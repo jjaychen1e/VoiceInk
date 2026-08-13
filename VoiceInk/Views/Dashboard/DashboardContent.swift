@@ -571,7 +571,7 @@ struct DashboardContent: View {
                 .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 14)
-        .frame(height: 36)
+        .frame(height: DashboardLayout.footerButtonHeight)
         .background(AppCardBackground(cornerRadius: 18))
     }
 
