@@ -1,3 +1,4 @@
+import CoreAudio
 import SwiftUI
 
 struct MenuBarView: View {
@@ -109,11 +110,22 @@ struct MenuBarView: View {
             }
 
             Menu {
+                Button {
+                    audioDeviceManager.selectInputMode(.systemDefault)
+                } label: {
+                    let isActive = audioDeviceManager.inputMode == .systemDefault
+                    Text(isActive ? "\(systemDefaultAudioInputTitle)  ✓" : systemDefaultAudioInputTitle)
+                }
+
+                if !audioDeviceManager.availableDevices.isEmpty {
+                    Divider()
+                }
+
                 ForEach(audioDeviceManager.availableDevices, id: \.id) { device in
                     Button {
                         audioDeviceManager.selectDeviceAndSwitchToCustomMode(id: device.id)
                     } label: {
-                        let isActive = audioDeviceManager.getCurrentDevice() == device.id
+                        let isActive = isPinnedAudioInputDevice(device.id)
                         Text(isActive ? "\(device.name)  ✓" : device.name)
                     }
                 }
@@ -294,6 +306,20 @@ struct MenuBarView: View {
                 : String(localized: "Live Translate: Captions")
         }
         return String(localized: "Live Translate")
+    }
+
+    /// Menu title for following macOS's current default input device.
+    private var systemDefaultAudioInputTitle: String {
+        guard let name = audioDeviceManager.getSystemDefaultDeviceName() else {
+            return String(localized: "System Default")
+        }
+        return String(format: String(localized: "System Default (%@)"), name)
+    }
+
+    /// Whether this device is the pinned custom/priority input, not merely the live system default.
+    private func isPinnedAudioInputDevice(_ deviceID: AudioDeviceID) -> Bool {
+        audioDeviceManager.inputMode != .systemDefault
+            && audioDeviceManager.getCurrentDevice() == deviceID
     }
 
     /// Resolves a language code to its menu label.
